@@ -1,2 +1,13 @@
 ./tmp/experiments/*
-./tmp/source/*k
+
+./tmp/source/*
+
+build/*
+
+dist/*
+*.egg-info/*
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
