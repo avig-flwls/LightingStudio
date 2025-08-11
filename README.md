@@ -1,15 +1,38 @@
+# LightingStudio
 
+A toolkit for lighting analysis HDRI
 
+## Setup
 
-Nuke License
+### Python Environment
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd LightingStudio
+
+# Install dependencies using uv
+uv sync --all-extras
+
+# Activate virtual environment
+# Linux/macOS:
+source .venv/bin/activate
+# Windows:
+.\.venv\Scripts\activate
 ```
+
+### Nuke License Configuration
+
+```batch
 set foundry_LICENSE=4101@license.us-west-2.root.flwls-infra.net
 & "C:\Program Files\Nuke13.2v9\Nuke13.2.exe"
-``
-
-
-Download HDRI's
 ```
+
+## Usage
+
+### Download HDRIs from Polyhaven
+
+```bash
 cd LightingStudio
 python src/LightingStudio/ingest/scrape_polyhaven.py --max-downloads 5 --max-resolution 1k --root-output-dir .\tmp\source\
 ```
