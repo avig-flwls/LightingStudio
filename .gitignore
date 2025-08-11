@@ -1,6 +1,4 @@
-./tmp/experiments/*
-
-./tmp/source/*
+tmp/*
 
 build/*
 
