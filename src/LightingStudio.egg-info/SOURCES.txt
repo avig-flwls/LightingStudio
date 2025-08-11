@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/LightingStudio.egg-info/PKG-INFO
+src/LightingStudio.egg-info/SOURCES.txt
+src/LightingStudio.egg-info/dependency_links.txt
+src/LightingStudio.egg-info/requires.txt
+src/LightingStudio.egg-info/top_level.txt

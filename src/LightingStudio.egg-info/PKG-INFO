@@ -1,0 +1,32 @@
+Metadata-Version: 2.1
+Name: LightingStudio
+Version: 0.1.0
+Summary: Library with tools for fitting accessories on the face
+Author-email: Avi Goyal <avi.goyal@flawlessai.com>
+Requires-Python: <3.12,>=3.11.7
+Requires-Dist: numpy
+Requires-Dist: tqdm
+Requires-Dist: einops
+Requires-Dist: scipy
+Requires-Dist: torch==2.3.1+cu121
+Requires-Dist: torchvision==0.18.1+cu121
+Requires-Dist: torchaudio==2.3.1+cu121
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: ipykernel
+Requires-Dist: ipywidgets
+Requires-Dist: pyvista
+Requires-Dist: seaborn
+Requires-Dist: trame
+Requires-Dist: trame-vtk
+Requires-Dist: trame-vuetify
+Requires-Dist: vtk
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.2; extra == "dev"
+Requires-Dist: pytest-cov<5,>=4.1; extra == "dev"
+Requires-Dist: pytest-timeout<3,>=2.2; extra == "dev"
+Requires-Dist: pytest-env<2,>=1.1; extra == "dev"
+Requires-Dist: pre-commit<4,>=3.6; extra == "dev"
+Requires-Dist: mypy<2,>=1.9; extra == "dev"
+Requires-Dist: types-all-latest<2,>=1.5; extra == "dev"
+Requires-Dist: ruff<1,>=0.8; extra == "dev"

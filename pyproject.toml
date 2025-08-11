@@ -1,0 +1,109 @@
+[project]
+name = "LightingStudio"
+version = "0.1.0"
+description = "Library with tools for fitting accessories on the face"
+authors = [{ name = "Avi Goyal", email = "avi.goyal@flawlessai.com" }]
+requires-python = ">=3.11.7,<3.12"
+
+dependencies = [
+    "numpy",
+    "tqdm",
+    "einops",
+    "scipy",
+    "torch==2.3.1+cu121",
+    "torchvision==0.18.1+cu121",
+    "torchaudio==2.3.1+cu121",
+    "pandas",
+    "matplotlib",
+    "ipykernel",
+    "ipywidgets",
+    "pyvista",
+    "seaborn",
+    "trame",
+    "trame-vtk",
+    "trame-vuetify",
+    "vtk"
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.2,<9",
+    "pytest-cov>=4.1,<5",
+    "pytest-timeout>=2.2,<3",
+    "pytest-env>=1.1,<2",
+    # Pre-commit
+    "pre-commit>=3.6,<4",
+    # Static type checking
+    "mypy>=1.9,<2",
+    "types-all-latest>=1.5,<2",
+    # Linter and Formatter
+    "ruff>=0.8,<1"
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+    "data",
+    "docs",
+    "pdoc",
+    "resources",
+    ".vscode",
+]
+fix = true
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+select = ["ALL"]
+ignore = [
+    "ANN401", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "D205", "G003", "G004", "ISC001", "TD002", "TD003", "TRY003", "E501",
+    "RET504", "N806", "N803", "COM812", "S101", "NPY002", "S311", "FBT001",
+    "FBT002", "RUF005", "UP022", "F405", "F403", "SIM102"
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["S101"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 7
+max-bool-expr = 5
+max-public-methods = 20
+max-statements = 50
+max-returns = 6
+max-locals = 15
+max-branches = 12
+
+[tool.ruff.lint.flake8-pytest-style]
+parametrize-names-type = "csv"
+
+[tool.ruff.lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "FLWLS",
+    "first-party",
+    "local-folder",
+]
+combine-as-imports = true
+known-local-folder = ["src", "tests", "interfaces"]
+
+[tool.ruff.lint.isort.sections]
+"FLWLS" = ["flwls_*"]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+extra-index-url = ["https://download.pytorch.org/whl/cu121"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
