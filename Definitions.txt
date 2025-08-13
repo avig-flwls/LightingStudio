@@ -1,0 +1,109 @@
+"""
+Angle definitions:
+theta (θ): elevation angle is measured from the x-y plane to the arm. Range [-pi/2, pi/2]
+phi (φ): azimuthal angle between the orthogonal projection of the radial line r onto the reference x-y-plane and the x-axis.  Range [-pi, pi]
+
+See image in [1]
+
+        +Z
+        |   p
+        |  /|
+        | / |
+        ._ θ| _ _ +Y
+       / \  |
+      / φ \ | 
+     /      .
+    +X
+
+
+Imagine you have a rubber blowup globe, and then you take this and try to stretch it into a rectangle.
+Near the poles you basically took all the points and stretched them across the entire line (for the very first line).
+
+[15] Equation 4:
+Alternatively you can think of the very first line (and the very last line) to be oversampled. This is because since the hardware takes 
+the same number of samples in each φ band, you get more samples per steradian near the poles, and fewer per steradian near the equator.
+
+                        +pi/2   +-------------------------------------------+
+                                |+Z        +Z        +Z       +Z          +Z|               
+                                |                                           |
+                                |                                           |
+Elevation (theta)          0    |-X        -Y        +X       +Y          -X|
+                                |                                           |
+                                |                                           |
+                                |-Z        -Z        -Z       -Z          -Z|
+                        -pi/2   +-------------------------------------------+
+                              -pi        -pi/2        φ      +pi/2           pi
+
+                                                Azimuthal (phi) 
+
+                 φ =     -π                      -π/2                    0                      +π/2                    +π
+            ------------------------------------------------------------------------------------------------------------------------
+θ = +π/2     |  (-0.00, -0.00, +1.00)   (+0.00, -0.00, +1.00)   (+0.00, +0.00, +1.00)   (+0.00, +0.00, +1.00)   (-0.00, +0.00, +1.00)
+θ = +π/4     |  (-0.71, -0.00, +0.71)   (+0.00, -0.71, +0.71)   (+0.71, +0.00, +0.71)   (+0.00, +0.71, +0.71)   (-0.71, +0.00, +0.71)
+θ =   0      |  (-1.00, -0.00, +0.00)   (+0.00, -1.00, +0.00)   (+1.00, +0.00, +0.00)   (+0.00, +1.00, +0.00)   (-1.00, +0.00, +0.00)
+θ = -π/4     |  (-0.71, -0.00, -0.71)   (+0.00, -0.71, -0.71)   (+0.71, +0.00, -0.71)   (+0.00, +0.71, -0.71)   (-0.71, +0.00, -0.71)
+θ = -π/2     |  (-0.00, -0.00, -1.00)   (+0.00, -0.00, -1.00)   (+0.00, +0.00, -1.00)   (+0.00, +0.00, -1.00)   (-0.00, +0.00, -1.00)
+
+
+Unit circle with labels at all pi/4 intervals:
+
+                +1.0
+                 |
+                 |
+      (3π/4)     |     (π/4)
+        *--------|--------*
+        |        |        |
+        |        |        |
+-1.0 ---*--------+--------*--- +1.0
+        |        |        |
+        |        |        |
+        *--------|--------*
+     (-3π/4)     |    (-π/4)
+                 |
+                 |
+                -1.0
+
+Labels at each * (counterclockwise from right), with (cos, sin) and their values:
+0        : (1, 0)         (0 radians)         cos(0)    =  1.0000,  sin(0)    =  0.0000
+π/4      : (√2/2, √2/2)   (45°)               cos(π/4)  =  0.7071,  sin(π/4)  =  0.7071
+π/2      : (0, 1)         (90°)               cos(π/2)  =  0.0000,  sin(π/2)  =  1.0000
+3π/4     : (-√2/2, √2/2)  (135°)              cos(3π/4) = -0.7071,  sin(3π/4) =  0.7071
+π        : (-1, 0)        (180°)              cos(π)    = -1.0000,  sin(π)    =  0.0000
+-3π/4    : (-√2/2, -√2/2) (-135°)             cos(-3π/4)= -0.7071,  sin(-3π/4)= -0.7071
+-π/2     : (0, -1)        (-90°)              cos(-π/2) =  0.0000,  sin(-π/2) = -1.0000
+-π/4     : (√2/2, -√2/2)  (-45°)              cos(-π/4) =  0.7071,  sin(-π/4) = -0.7071
+(or equivalently, 5π/4, 3π/2, 7π/4, etc.)
+
+
+Irradiance vs Radiance: (for our sake)
+Irradiance is light arriving from an external source to a point on the surface
+Radiance is light leaving from from a surface to a viewer
+
+
+Irradiance:             Radiance:
+start                          end
+     \                        /
+      \                      /
+       \                    /
+        end             start
+-------------------------------------- Surface
+
+
+References:
+
+[1] mathworks / matlab cart2sph and sph2cart functions
+[2] https://www.ppsloan.org/publications/StupidSH36.pdf
+[3] https://3dvar.com/Green2003Spherical.pdf
+[4] An Efficient Representation for Irradiance Environment Maps by Pat and Ravi.
+[5] https://github.com/chalmersgit/SphericalHarmonics/tree/master
+[6] Google SPH Library https://github.com/google/spherical-harmonics/tree/ccb6c7fec875a1cd5ce5eb1315a9fa7603e0919a
+[7] Local, Deformable Precomputed Radiance Transfer by Sloan et al.
+[8] https://web.archive.org/web/20191117195948/https://simonstechblog.blogspot.com/2012/02/extracting-dominant-light-from.html
+[9] March of the Froblins by Shopf et al.
+[10] Physically-Based Shading Models in Film and Game Production by  Hoffman et al.
+[11] https://en.wikipedia.org/wiki/Spherical_coordinate_system#
+[12] Precomputed Radiance Transfer for Real-Time Rendering in Dynamic, Low-Frequency Lighting Environments Sloan et al.
+[13] https://i.ytimg.com/vi/yRJ2Xf2oH5w/maxresdefault.jpg
+[14] https://stackoverflow.com/a/1847112
+[15] Acquiring the Reflectance Field of a Human Face
+"""

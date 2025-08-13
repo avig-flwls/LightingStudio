@@ -22,7 +22,9 @@ dependencies = [
     "trame",
     "trame-vtk",
     "trame-vuetify",
-    "vtk"
+    "vtk",
+    "opencv-python",
+    "coolname"
 ]
 
 [project.optional-dependencies]

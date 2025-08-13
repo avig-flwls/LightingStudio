@@ -19,6 +19,8 @@ uv sync --all-extras
 source .venv/bin/activate
 # Windows:
 .\.venv\Scripts\activate
+
+uv pip install -e .
 ```
 
 ### Nuke License Configuration
