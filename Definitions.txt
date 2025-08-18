@@ -105,5 +105,6 @@ References:
 [12] Precomputed Radiance Transfer for Real-Time Rendering in Dynamic, Low-Frequency Lighting Environments Sloan et al.
 [13] https://i.ytimg.com/vi/yRJ2Xf2oH5w/maxresdefault.jpg
 [14] https://stackoverflow.com/a/1847112
-[15] Acquiring the Reflectance Field of a Human Face
+[15] Acquiring the Reflectance Field of a Human Face Debevec et. al.
+[16] Inverse Tone Mapping Banterle et. al.
 """
