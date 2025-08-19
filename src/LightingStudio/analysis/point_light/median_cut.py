@@ -7,23 +7,11 @@ It uses PyTorch throughout for GPU acceleration and consistency with the analysi
 """
 
 import heapq
-from dataclasses import dataclass
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 import torch
 
 from ..utils import luminance, pixel_solid_angles, generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_pixel
-
-
-@dataclass(order=True)
-class Region:
-    """A rectangular region in the HDRI for median cut subdivision."""
-    # The heap will maximize energy by using negative sort key
-    sort_key: float
-    y0: int
-    y1: int
-    x0: int
-    x1: int
-    energy: float
+from ..datatypes import Region, SampleGPU, SampleCPU
 
 
 def cumulative_axis_sums(energy: torch.Tensor, axis: int) -> torch.Tensor:
@@ -76,12 +64,21 @@ def split_region_by_median(energy: torch.Tensor, y0: int, y1: int, x0: int, x1: 
     
     Returns:
         Tuple of two child rectangles: ((y0, y1, x0, x1), (y0, y1, x0, x1))
+        Returns the original region twice if it cannot be split without creating zero-area regions
     """
     h = y1 - y0
     w = x1 - x0
     
-    # Choose split axis: longer side (in pixels)
-    if w > h:
+    # Check if region is too small to split (need at least 2 pixels in each dimension to split)
+    if h < 2 and w < 2:
+        return (y0, y1, x0, x1), (y0, y1, x0, x1)
+    
+    # Choose split axis: prefer the dimension that has at least 2 pixels
+    if h < 2:
+        axis = 1  # Can only split columns
+    elif w < 2:
+        axis = 0  # Can only split rows
+    elif w > h:
         axis = 1  # split columns
     elif h > w:
         axis = 0  # split rows
@@ -94,12 +91,16 @@ def split_region_by_median(energy: torch.Tensor, y0: int, y1: int, x0: int, x1: 
 
     if axis == 0:
         # Split rows
+        if h < 2:
+            return (y0, y1, x0, x1), (y0, y1, x0, x1)
         marg = cumulative_axis_sums(energy[y0:y1, x0:x1], axis=0)
         k = find_median_cut_index(marg)
         child_a = (y0, y0 + k, x0, x1)
         child_b = (y0 + k, y1, x0, x1)
     else:
         # Split columns
+        if w < 2:
+            return (y0, y1, x0, x1), (y0, y1, x0, x1)
         marg = cumulative_axis_sums(energy[y0:y1, x0:x1], axis=1)
         k = find_median_cut_index(marg)
         child_a = (y0, y1, x0, x0 + k)
@@ -118,7 +119,7 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
         
     Returns:
         Dictionary containing:
-        - power_rgb: Total RGB power (∑ L_rgb * Δω) () treat this as radiant flux per steradian integrated over region (i.e., “power” the light should emit).
+        - power_rgb: Total RGB power (∑ L_rgb * Δω) () treat this as radiant flux per steradian integrated over region (i.e., "power" the light should emit).
         - direction: Energy-weighted average direction (unit vector)
         - energy: Total luminance energy (∑ luminance * Δω)
         - solid_angle: Total solid angle (∑ Δω)
@@ -175,7 +176,7 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
     }
 
 
-def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
+def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[torch.device] = None) -> List[SampleGPU]:
     """
     Perform median cut sampling on a lat-long HDRI environment map.
     
@@ -185,12 +186,14 @@ def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[tor
         device: Optional device to run computation on (defaults to hdri.device)
     
     Returns:
-        List of light sample dictionaries, each containing:
+        List of SampleGPU objects, each containing:
         - direction: Unit direction vector as torch.Tensor [x, y, z]
         - power_rgb: Total RGB power as torch.Tensor [r, g, b] over the region
         - solid_angle: Total solid angle as torch.Tensor
         - avg_radiance_rgb: Average radiance as torch.Tensor [r, g, b] (power / solid_angle)
         - rect: Pixel bounds (y0, y1, x0, x1) of the region
+        - pixel_coords: Pixel coordinates as torch.Tensor [u, v]
+        - energy: Total luminance energy as torch.Tensor
     """
     if device is None:
         device = hdri.device
@@ -226,14 +229,22 @@ def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[tor
         region = heapq.heappop(heap)
         child_a, child_b = split_region_by_median(energy_map, region.y0, region.y1, region.x0, region.x1)
         
-        # Add children to heap with their energies
+        # Add children to heap with their energies (avoid duplicates when split fails)
         for (yy0, yy1, xx0, xx1) in (child_a, child_b):
-            child_energy = torch.sum(energy_map[yy0:yy1, xx0:xx1]).item()
-            heapq.heappush(heap, Region(
-                sort_key=-child_energy,
-                y0=yy0, y1=yy1, x0=xx0, x1=xx1,
-                energy=child_energy
-            ))
+            # Validate child region
+            if yy1 > yy0 and xx1 > xx0:  # Must have positive width and height
+                # Check if this is the same as the original region (happens when split fails)
+                if (yy0, yy1, xx0, xx1) == (region.y0, region.y1, region.x0, region.x1):
+                    continue
+                
+                child_energy = torch.sum(energy_map[yy0:yy1, xx0:xx1]).item()
+                heapq.heappush(heap, Region(
+                    sort_key=-child_energy,
+                    y0=yy0, y1=yy1, x0=xx0, x1=xx1,
+                    energy=child_energy
+                ))
+            else:
+                pass  # Skip invalid child regions silently
     
     # Collect remaining regions from heap
     while heap and len(regions) < n_samples:
@@ -244,20 +255,21 @@ def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[tor
     samples = []
     for (y0, y1, x0, x1) in regions:
         stats = compute_region_stats(hdri, y0, y1, x0, x1)
-        samples.append({
-            'direction': stats['direction'],
-            'power_rgb': stats['power_rgb'],
-            'solid_angle': stats['solid_angle'],
-            'avg_radiance_rgb': stats['avg_radiance_rgb'],
-            'rect': stats['rect'],
-            'pixel_coords': stats['pixel_coords'],
-            'energy': stats['energy'],
-        })
+        sample = SampleGPU(
+            direction=stats['direction'],
+            power_rgb=stats['power_rgb'],
+            solid_angle=stats['solid_angle'],
+            avg_radiance_rgb=stats['avg_radiance_rgb'],
+            rect=stats['rect'],
+            pixel_coords=stats['pixel_coords'],
+            energy=stats['energy']
+        )
+        samples.append(sample)
     
     return samples
 
 
-def median_cut_sampling_to_cpu(hdri: torch.Tensor, n_samples: int, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
+def median_cut_sampling_to_cpu(hdri: torch.Tensor, n_samples: int, device: Optional[torch.device] = None) -> List[SampleCPU]:
     """
     Convenience function that performs median cut sampling and converts results to CPU/numpy.
     
@@ -267,37 +279,40 @@ def median_cut_sampling_to_cpu(hdri: torch.Tensor, n_samples: int, device: Optio
         device: Optional device to run computation on (defaults to hdri.device)
     
     Returns:
-        List of light sample dictionaries with CPU tensors converted to lists:
+        List of SampleCPU objects with CPU tensors converted to lists:
         - direction: Unit direction vector [x, y, z] as list
         - power_rgb: Total RGB power [r, g, b] as list
         - solid_angle: Total solid angle as float
         - avg_radiance_rgb: Average radiance [r, g, b] as list
         - rect: Pixel bounds (y0, y1, x0, x1) of the region
+        - pixel_coords: Pixel coordinates [u, v] as list
+        - energy: Total luminance energy as float
     """
     samples = median_cut_sampling(hdri, n_samples, device)
     
     # Convert tensors to CPU and then to lists/floats
     cpu_samples = []
     for sample in samples:
-        cpu_samples.append({
-            'direction': sample['direction'].cpu().numpy().tolist(),
-            'power_rgb': sample['power_rgb'].cpu().numpy().tolist(),
-            'solid_angle': sample['solid_angle'].cpu().item(),
-            'avg_radiance_rgb': sample['avg_radiance_rgb'].cpu().numpy().tolist(),
-            'rect': sample['rect'],
-            'pixel_coords': sample['pixel_coords'].cpu().numpy().tolist(),
-            'energy': sample['energy'].cpu().item(),
-        })
+        cpu_sample = SampleCPU(
+            direction=sample.direction.cpu().numpy().tolist(),
+            power_rgb=sample.power_rgb.cpu().numpy().tolist(),
+            solid_angle=sample.solid_angle.cpu().item(),
+            avg_radiance_rgb=sample.avg_radiance_rgb.cpu().numpy().tolist(),
+            rect=sample.rect,
+            pixel_coords=sample.pixel_coords.cpu().numpy().tolist(),
+            energy=sample.energy.cpu().item()
+        )
+        cpu_samples.append(cpu_sample)
     
     return cpu_samples
 
-def visualize_samples(hdri: torch.Tensor, samples: List[Dict[str, Any]]) -> torch.Tensor:
+def visualize_samples(hdri: torch.Tensor, samples: List[Union[SampleGPU, SampleCPU]]) -> torch.Tensor:
     """
     Visualize the samples on the HDRI with blue boxes around regions and red circles around pixel coordinates.
     
     Args:
         hdri: Input HDRI tensor (H, W, 3)
-        samples: List of sample dictionaries containing 'pixel_coords', 'rect', and 'avg_radiance_rgb'
+        samples: List of SampleGPU or SampleCPU objects
     
     Returns:
         Visualization tensor with blue region boundaries and red pixel markers
@@ -310,18 +325,23 @@ def visualize_samples(hdri: torch.Tensor, samples: List[Dict[str, Any]]) -> torc
     red_color = torch.tensor([1.0, 0.0, 0.0], device=hdri.device, dtype=hdri.dtype)
     
     for sample in samples:
-        # Get sample data
-        pixel_coords = sample['pixel_coords']
-        rect = sample['rect']  # (y0, y1, x0, x1)
+        # Get sample data from SampleGPU or SampleCPU objects
+        pixel_coords = sample.pixel_coords
+        rect = sample.rect
         y0, y1, x0, x1 = rect
         
         # Ensure coordinates are within bounds
         y0, y1 = max(0, y0), min(H, y1)
         x0, x1 = max(0, x0), min(W, x1)
         
-        # pixel_coords is now [x, y]
-        pixel_x = max(0, min(W-1, pixel_coords[0]))
-        pixel_y = max(0, min(H-1, pixel_coords[1]))
+        # Handle different pixel_coords types (tensor vs list)
+        if isinstance(pixel_coords, torch.Tensor):
+            pixel_x = max(0, min(W-1, int(pixel_coords[0].item())))
+            pixel_y = max(0, min(H-1, int(pixel_coords[1].item())))
+        else:
+            # pixel_coords is a list (SampleCPU)
+            pixel_x = max(0, min(W-1, int(pixel_coords[0])))
+            pixel_y = max(0, min(H-1, int(pixel_coords[1])))
         
         # Draw blue box around the region
         # Top and bottom borders

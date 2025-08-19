@@ -107,4 +107,16 @@ References:
 [14] https://stackoverflow.com/a/1847112
 [15] Acquiring the Reflectance Field of a Human Face Debevec et. al.
 [16] Inverse Tone Mapping Banterle et. al.
+
+
+Future Directions:
+- Layout based approach for indoor lighting:
+        Deep indoor illumination estimation based on spherical gaussian representation with scene prior knowledge
+        EverLight: Indoor-Outdoor Editable HDR Lighting Estimatio
+        Editable indoor lighting estimation
+        EnvyDepth: An Interface for Recovering Local Natural Illumination from Environment Maps
+
+- Spherical Gaussian based predictions:
+        Deep Parametric Indoor Lighting Estimation
+
 """
