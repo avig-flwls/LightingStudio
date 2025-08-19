@@ -1,7 +1,7 @@
 import argparse
 from ..point_light.median_cut import median_cut_sampling, median_cut_sampling_to_cpu, visualize_samples
 from .density_estimation import expand_map_exact, expand_map_fast
-from ..utils import read_exrs, write_exr
+from ..io import read_exrs, write_exr
 import torch
 from coolname import generate_slug
 from pathlib import Path

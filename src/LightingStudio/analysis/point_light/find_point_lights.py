@@ -1,6 +1,6 @@
 import argparse
 from .median_cut import median_cut_sampling, median_cut_sampling_to_cpu, visualize_samples
-from ..utils import read_exrs, write_exr
+from ..io import read_exrs, write_exr
 import torch
 from coolname import generate_slug
 from pathlib import Path
