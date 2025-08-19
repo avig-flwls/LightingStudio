@@ -6,18 +6,22 @@ import torch
 from coolname import generate_slug
 from pathlib import Path
 import json
+import time
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
-# KEEP IN MIND: this works only if number of n_samples > 1024
-
 # python -m src.LightingStudio.analysis.area_light.find_area_lights --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" --n_samples 1024
+# python -m src.LightingStudio.analysis.area_light.find_area_lights --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Games Room 02.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Factory Canteen 02.exr" --n_samples 1024
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--hdri", type=str, nargs='+', required=True, help="List of HDRI file paths")
-    parser.add_argument("--n_samples", type=int, required=True)
+    parser.add_argument("--n_samples", type=int, required=True, help="Number of samples (must be > 1024)")
     args = parser.parse_args()
+
+    if args.n_samples < 1024:
+        parser.error("The value of --n_samples must be greater than 1024.")
 
     experiment_name = generate_slug(2)
     output_dir = Path(OUTPUT_DIR) / experiment_name
@@ -31,22 +35,52 @@ if __name__ == "__main__":
         hdri_path = Path(hdri_path)
         print(f"Processing {hdri_path}...")
 
+        # Start analysis
+        print("Starting analysis...")
+        
+        # Time median cut sampling
+        start_time = time.time()
         samples_cpu = median_cut_sampling_to_cpu(hdri, args.n_samples)
+        sampling_time = time.time() - start_time
+        print(f"Median cut sampling complete in {sampling_time:.2f} seconds.")
+        
+        # Time exact density map
+        start_time = time.time()
         density_map_exact = expand_map_exact(hdri, samples_cpu, min_count=4, normalize=True)
+        exact_time = time.time() - start_time
+        print(f"Exact density map complete in {exact_time:.2f} seconds.")
+        
+        # Time fast density map
+        start_time = time.time()
         density_map_fast = expand_map_fast(hdri, samples_cpu, min_count=4, normalize=True)
+        fast_time = time.time() - start_time
+        print(f"Fast density map complete in {fast_time:.2f} seconds.")
 
         # Save density map
         write_exr(density_map_exact, output_dir / f"{hdri_path.stem}_density_map_exact.exr")
         write_exr(density_map_fast, output_dir / f"{hdri_path.stem}_density_map_fast.exr")
 
-        # Save samples visualization
+        # Time samples visualization
+        start_time = time.time()
         vis_hdri = visualize_samples(hdri, samples_cpu)
+        vis_time = time.time() - start_time
+        print(f"Samples visualization complete in {vis_time:.2f} seconds.")
         write_exr(vis_hdri, output_dir / f"{hdri_path.stem}_median_cut.exr")
 
         # Save samples - convert to dict for JSON serialization
         samples_dict = [sample.to_dict() for sample in samples_cpu]
         with open(output_dir / f"{hdri_path.stem}.json", "w") as f:
             json.dump(samples_dict, f, indent=2)
+        
+        # Print timing summary
+        total_time = sampling_time + exact_time + fast_time + vis_time
+        print(f"\nTiming Summary for {hdri_path.stem}:")
+        print(f"  Median cut sampling: {sampling_time:.2f}s")
+        print(f"  Exact density map:   {exact_time:.2f}s")
+        print(f"  Fast density map:    {fast_time:.2f}s")
+        print(f"  Visualization:       {vis_time:.2f}s")
+        print(f"  Total analysis time: {total_time:.2f}s")
+        print("-" * 50)
 
 
  
