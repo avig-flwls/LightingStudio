@@ -40,10 +40,29 @@ def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> torch.Tenso
     phi_range = 2.0 * np.pi
     pixel_area = (theta_range / H) * (phi_range / W)
 
-    theta_centers = torch.tensor(np.arange(H, dtype=np.float32) + 0.5, device=device) # (H)
-    solid_angle = torch.maximum(theta_centers * pixel_area, torch.tensor(0.0, device=device)) # (H,) # Avoid tiny negatives at poles
+    theta_centers = torch.pi * (torch.arange(H, device=device, dtype=torch.float32) + 0.5) / H
+    solid_angle = torch.maximum(torch.sin(theta_centers) * pixel_area, torch.tensor(0.0, device=device)) # (H,) # Avoid tiny negatives at poles
     
     return solid_angle.unsqueeze(-1)  # (H, 1)
+
+def convert_theta(theta:torch.Tensor) -> torch.Tensor:
+    """
+    Convert matlab theta definition to physics based theta definition.
+
+    The polar angle θ is measured between the z-axis and the radial line r. aka Colatitude.
+
+    : params theta: (H, W)
+    : returns new_theta: (H, W)
+
+    Source:
+    [11] definition
+    [6] ImageYToTheta function
+    """
+
+    new_theta = theta + torch.pi/2.0               # move from [pi/2 , -pi/2] --> [pi, 0]
+    new_theta = torch.flip(new_theta, dims=[0])    # move from [pi, 0] --> [0, pi]
+
+    return new_theta
 
 def generate_spherical_coordinates_map(H:int, W:int, device: torch.device = None) -> torch.Tensor:
     """
@@ -112,9 +131,9 @@ def generate_spherical_coordinates_map(H:int, W:int, device: torch.device = None
     phi_offset = -np.pi
 
     # Create Map 
-    theta_s = torch.tensor(np.arange(H)/H, device=device) * theta_range + theta_offset # (H)
+    theta_s = torch.tensor(np.arange(H)/H, device=device, dtype=torch.float32) * theta_range + theta_offset # (H)
     theta_s = -1.0*theta_s                                              # make sure that the top left corner is +pi/2 for theta
-    phi_s = torch.tensor(np.arange(W)/W, device=device) * phi_range + phi_offset       # (W)
+    phi_s = torch.tensor(np.arange(W)/W, device=device, dtype=torch.float32) * phi_range + phi_offset       # (W)
 
     # Create coordinate map directly using broadcasting and stack
     theta_map = repeat(theta_s, "h -> h w", w=W)     # (H, W)

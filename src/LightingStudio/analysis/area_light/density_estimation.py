@@ -6,7 +6,6 @@ https://www.banterle.com/francesco/publications/download/graphite2006.pdf
 This module implements the density estimation based on Expand Map.
 It uses PyTorch throughout for GPU acceleration and consistency with the analysis utilities.
 """
-
 import torch
 import numpy as np
 import cv2

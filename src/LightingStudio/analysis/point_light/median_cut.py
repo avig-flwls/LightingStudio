@@ -7,6 +7,7 @@ It uses PyTorch throughout for GPU acceleration and consistency with the analysi
 """
 
 import heapq
+import logging
 from typing import List, Tuple, Dict, Any, Optional, Union
 import torch
 
@@ -126,8 +127,12 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
         - avg_radiance_rgb: Average radiance (power / solid_angle)
         - rect: Rectangle bounds
     """
+    logger = logging.getLogger(__name__)
+    
     H, W, _ = hdri.shape
     device = hdri.device
+    
+    logger.debug(f"Computing region stats for region ({y0}:{y1}, {x0}:{x1}) on HDRI shape {(H, W)} device={device}")
     
     # Get solid angles for the region
     sa_map = pixel_solid_angles(H, W, device=device)  # (H, 1)
@@ -138,10 +143,14 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
     rgb_region = hdri[y0:y1, x0:x1, :]  # (region_h, region_w, 3)
     lum_region = luminance(rgb_region) # (region_h, region_w)
     
+    logger.debug(f"Region shape: {rgb_region.shape}, solid angle shape: {sa_region.shape}")
+    
     # Compute energy and power
     energy = torch.sum(lum_region * sa_region)
     power_rgb = torch.sum(rgb_region * sa_region.unsqueeze(-1), dim=(0, 1))  # (3,)
     total_solid_angle = torch.sum(sa_region)
+    
+    logger.debug(f"Energy: {energy:.6f}, Power RGB: {power_rgb}, Total solid angle: {total_solid_angle:.6f}")
     
     # Compute energy-weighted average direction
     # Generate spherical coordinates for the region
@@ -155,9 +164,28 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
     weights = (lum_region * sa_region).unsqueeze(-1)  # (region_h, region_w, 1)
     weighted_dir = torch.sum(cartesian_dirs * weights, dim=(0, 1))  # (3,)
 
-    # Normalize to unit vector
-    dir_norm = torch.linalg.norm(weighted_dir) + 1e-12
-    direction = weighted_dir / dir_norm
+    # Log weight statistics to debug small weight issues
+    weight_sum = torch.sum(weights)
+    weight_max = torch.max(weights)
+    weight_min = torch.min(weights)
+    logger.debug(f"Weight statistics - sum: {weight_sum:.2e}, max: {weight_max:.2e}, min: {weight_min:.2e}")
+    logger.debug(f"Weighted direction (unnormalized): {weighted_dir}, magnitude: {torch.linalg.norm(weighted_dir):.2e}")
+
+    # Normalize to unit vector with fallback for near-zero vectors
+    dir_norm = torch.linalg.norm(weighted_dir)
+    
+    # Check if the weighted direction is too small (indicating uniform/dark region)
+    if dir_norm < 1e-8:
+        logger.debug(f"Weighted direction norm ({dir_norm:.2e}) is very small - using geometric mean fallback")
+        # Fallback: use simple geometric mean of all directions in the region
+        avg_dir = torch.mean(cartesian_dirs, dim=(0, 1))  # (3,)
+        avg_dir_norm = torch.linalg.norm(avg_dir)
+        direction = avg_dir / avg_dir_norm
+        logger.debug(f"Fallback direction (unnormalized): {avg_dir}, norm: {avg_dir_norm:.6f}")
+    else:
+        direction = weighted_dir / dir_norm
+
+    logger.debug(f"Final direction: {direction}, norm: {torch.linalg.norm(direction):.6f}")
 
     # Find pixel location of direction
     pixel_coords = cartesian_to_pixel(direction, H, W)
@@ -165,7 +193,9 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
     # Compute average radiance
     avg_radiance = power_rgb / torch.clamp(total_solid_angle, min=1e-12)
     
-    return {
+    logger.debug(f"Pixel coordinates: {pixel_coords}, Average radiance: {avg_radiance}")
+    
+    result = {
         'power_rgb': power_rgb,
         'direction': direction,
         'pixel_coords': pixel_coords,
@@ -174,6 +204,12 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
         'avg_radiance_rgb': avg_radiance,
         'rect': (int(y0), int(y1), int(x0), int(x1))
     }
+    
+    logger.debug(f"Computed stats for region ({y0}:{y1}, {x0}:{x1}): "
+                f"energy={energy:.6f}, solid_angle={total_solid_angle:.6f}, "
+                f"power_sum={torch.sum(power_rgb):.6f}")
+    
+    return result
 
 
 def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[torch.device] = None) -> List[SampleGPU]:
