@@ -15,7 +15,7 @@ def luminance(batch_rgb: torch.Tensor) -> torch.Tensor:
     return 0.2126 * batch_rgb[...,0] + 0.7152 * batch_rgb[...,1] + 0.0722 * batch_rgb[...,2]
 
 
-def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> torch.Tensor:
+def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute the solid angle of a pixel.
     In spherical coordinates there is a formula for the differential, d Ω = sin ⁡ θ d θ d φ , where θ is the colatitude (angle from the North Pole).
@@ -27,7 +27,7 @@ def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> torch.Tenso
     :param H: height
     :param W: width
     :param device: torch device to place the result tensor on
-    :return: (H, 1)
+    :return: pixel_area (1), sin_theta: (H, 1)
 
     Source:
     [5] getSolidAngle function
@@ -41,9 +41,9 @@ def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> torch.Tenso
     pixel_area = (theta_range / H) * (phi_range / W)
 
     theta_centers = torch.pi * (torch.arange(H, device=device, dtype=torch.float32) + 0.5) / H
-    solid_angle = torch.maximum(torch.sin(theta_centers) * pixel_area, torch.tensor(0.0, device=device)) # (H,) # Avoid tiny negatives at poles
-    
-    return solid_angle.unsqueeze(-1)  # (H, 1)
+    sin_theta = torch.maximum(torch.sin(theta_centers), torch.tensor(0.0, device=device)) # (H,) # Avoid tiny negatives at poles
+
+    return pixel_area, sin_theta.unsqueeze(-1)  # (H, 1)
 
 def convert_theta(theta:torch.Tensor) -> torch.Tensor:
     """

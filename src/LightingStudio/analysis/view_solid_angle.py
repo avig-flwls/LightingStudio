@@ -25,16 +25,23 @@ def main():
     
     # Call pixel_solid_angles function
     print(f"Computing pixel solid angles for {H}x{W} image...")
-    solid_angles = pixel_solid_angles(H, W, device)  # Returns (H, 1)
+    pixel_area, sin_theta = pixel_solid_angles(H, W, device)  # Returns (H, 1)
+    solid_angles = pixel_area * sin_theta
+    print(f"Pixel area: {pixel_area}")
     print(f"Solid angles shape: {solid_angles.shape}")
     print(f"Solid angles range: [{solid_angles.min():.6f}, {solid_angles.max():.6f}]")
     
     # Convert to 3-channel format for EXR (RGB format expected by write_exr)
     # Broadcast the solid angle values to all 3 channels
-    solid_angles_3ch = repeat(solid_angles, "h 1 -> h w 3", w=W)  # (H, W, 3)
+    sin_theta_3ch = repeat(sin_theta, "h 1 -> h w 3", w=W)  # (H, W, 3)
+    solid_angles_3ch = sin_theta_3ch * pixel_area
     
     # Save as EXR
-    output_path = output_dir / "pixel_solid_angles.exr"
+    output_path = output_dir / "sin_theta.exr"
+    print(f"Saving sin_theta to: {output_path}")
+    write_exr(sin_theta_3ch, str(output_path))
+
+    output_path = output_dir / "solid_angles.exr"
     print(f"Saving solid angles to: {output_path}")
     write_exr(solid_angles_3ch, str(output_path))
     

@@ -135,7 +135,8 @@ def compute_region_stats(hdri: torch.Tensor, y0: int, y1: int, x0: int, x1: int)
     logger.debug(f"Computing region stats for region ({y0}:{y1}, {x0}:{x1}) on HDRI shape {(H, W)} device={device}")
     
     # Get solid angles for the region
-    sa_map = pixel_solid_angles(H, W, device=device)  # (H, 1)
+    pixel_area, sin_theta = pixel_solid_angles(H, W, device=device)
+    sa_map = pixel_area * sin_theta
     sa_region = sa_map[y0:y1, :]  # (region_h, 1)
     sa_region = sa_region.expand(y1 - y0, x1 - x0)  # (region_h, region_w)
     
@@ -240,7 +241,8 @@ def median_cut_sampling(hdri: torch.Tensor, n_samples: int, device: Optional[tor
     
     # Compute luminance and solid angles
     lum = luminance(hdri)  # (H, W)
-    sa_map = pixel_solid_angles(H, W, device=device)  # (H, 1)
+    pixel_area, sin_theta = pixel_solid_angles(H, W, device=device)
+    sa_map = pixel_area * sin_theta
     sa_full = sa_map.expand(H, W)  # (H, W)
     
     # Create energy map for splitting decisions
