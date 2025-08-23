@@ -242,13 +242,6 @@ def cartesian_to_sph_basis_vectorized(cartesian_coordinates: torch.Tensor, l_max
         Ylm[..., sph_index_from_lm(4, 3)] = -c4_3 * x * z * (x2 - 3 * y2)
         Ylm[..., sph_index_from_lm(4, 4)] = c4_4 * 0.25 * (x4 - 6 * y2 * x2 + y4)  # 0.625836 = c4_4 * 0.25
     
-    # For l_max > 4, fall back to the original implementation
-    if l_max > 4:
-        for l in range(5, l_max + 1):  # noqa: E741
-            for m in range(-l, l + 1):
-                index = sph_index_from_lm(l, m)
-                Ylm[..., index] = cartesian_to_sph_eval(cartesian_coordinates, l, m)
-    
     return Ylm
 
 
@@ -316,14 +309,15 @@ def spherical_to_sph_eval(spherical_coordinates: torch.Tensor, l:int, m:int) -> 
 
     # Prep
     theta, phi = spherical_coordinates[..., 0], spherical_coordinates[..., 1] # (H, W)
+    cos_theta = torch.cos(convert_theta(theta))
 
     # Compute Y
     if (m==0):
-        return K(l,m) * P (l, m, torch.cos(convert_theta(theta)))
+        return K(l,m) * P (l, m, cos_theta)
     elif(m > 0):
-        return math.sqrt(2)*K(l,m)*torch.cos(m*phi)*P(l,m,torch.cos(convert_theta(theta)))
+        return math.sqrt(2)*K(l,m)*torch.cos(m*phi)*P(l,m,cos_theta)
     else:
-        return math.sqrt(2)*K(l,m)*torch.sin(-m*phi)*P(l,-m,torch.cos(convert_theta(theta)))
+        return math.sqrt(2)*K(l,m)*torch.sin(-m*phi)*P(l,-m,cos_theta)
 
 def spherical_to_sph_basis(spherical_coordinates: torch.Tensor, l_max: int) -> torch.Tensor:
     """
@@ -446,8 +440,7 @@ def spherical_to_sph_basis_vectorized(spherical_coordinates: torch.Tensor, l_max
     theta, phi = spherical_coordinates[..., 0], spherical_coordinates[..., 1]
     
     # Convert to physics convention and get cosine
-    theta_physics = theta  # Assuming convert_theta is already applied if needed
-    cos_theta = torch.cos(theta_physics)
+    cos_theta = torch.cos(convert_theta(theta))
     
     # Compute Associated Legendre polynomials for all (l,m) pairs
     P = associated_legendre_polynomial_vectorized(l_max, cos_theta)
@@ -528,18 +521,47 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
 
     return sph_coeffs, sph_basis
 
-def sph_term_within_band(l: int) -> int:  # noqa: E741
-	return (l*2)+1
+# def sph_term_within_band(l: int) -> int:  # noqa: E741
+# 	return (l*2)+1
 
-def sph_indices_total(l_max: int) -> int:
-	return (l_max + 1) * (l_max + 1)
+# def sph_indices_total(l_max: int) -> int:
+# 	return (l_max + 1) * (l_max + 1)
 
-def sph_index_from_lm(l:int, m:int) -> int:
-	return l*l+l+m
+# def sph_index_from_lm(l:int, m:int) -> int:
+# 	return l*l+l+m
 
-def l_from_index(idx:int) -> int:
-	return int(np.sqrt(idx))
+# def l_from_index(idx:int) -> int:
+# 	return int(np.sqrt(idx))
+
+# def sph_l_max_from_indices_total(n_terms: int) -> int:
+# 	return int(np.sqrt(n_terms) - 1)
+
+# def lm_from_index(idx:int) -> tuple[int, int]:
+# 	return l_from_index(idx), idx - l_from_index(idx) * l_from_index(idx)
+
+def sph_term_within_band(l: int) -> int:  # (2l + 1)
+    return 2 * l + 1
+
+def sph_indices_total(l_max: int) -> int:  # (l_max + 1)^2
+    return (l_max + 1) * (l_max + 1)
+
+def sph_index_from_lm(l: int, m: int) -> int:
+    # band l occupies indices [l*l, (l+1)^2 - 1], with m mapped as (l + m)
+    # => index = l*l + (l + m) = l*l + l + m
+    return l * l + l + m
+
+def l_from_index(idx: int) -> int:
+    # exact integer sqrt: largest l with l*l <= idx
+    return math.isqrt(idx)
 
 def sph_l_max_from_indices_total(n_terms: int) -> int:
-	return int(np.sqrt(n_terms) - 1)
+    # inverse of (l_max + 1)^2; validate if you like
+    root = math.isqrt(n_terms)
+    # optional guard:
+    # assert root * root == n_terms, f"n_terms={n_terms} is not a perfect square"
+    return root - 1
 
+def lm_from_index(idx: int) -> tuple[int, int]:
+    l = l_from_index(idx)
+    m = idx - (l * l + l)   # <-- the key fix
+    return l, m

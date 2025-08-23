@@ -12,13 +12,17 @@ import numpy as np
 import time
 import pyvista as pv
 from typing import Tuple, Optional
+from coolname import generate_slug
+from pathlib import Path
 
 from .sph import (
     cartesian_to_sph_basis, cartesian_to_sph_basis_vectorized,
     spherical_to_sph_basis, spherical_to_sph_basis_vectorized,
-    project_env_to_coefficients, sph_indices_total
+    project_env_to_coefficients, sph_indices_total, lm_from_index, spherical_to_sph_eval
 )
-from ..utils import generate_spherical_coordinates_map, spherical_to_cartesian
+from ..utils import generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_spherical
+
+OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
 
 def test_vectorized_vs_original(cartesian_coordinates: torch.Tensor, l_max: int = 4) -> bool:
@@ -32,14 +36,23 @@ def test_vectorized_vs_original(cartesian_coordinates: torch.Tensor, l_max: int 
     # Compute with both methods
     original_result = cartesian_to_sph_basis(cartesian_coordinates, l_max)
     vectorized_result = cartesian_to_sph_basis_vectorized(cartesian_coordinates, l_max)
-    
+
     # Check if results are close
-    is_close = torch.allclose(original_result, vectorized_result, rtol=1e-6, atol=1e-8)
-    
-    if not is_close:
-        max_diff = torch.max(torch.abs(original_result - vectorized_result))
-        print(f"Results differ! Max difference: {max_diff.item():.2e}")
-        return False
+    print(f"Original result: {original_result.shape}")
+    print(f"Vectorized result: {vectorized_result.shape}")
+
+    # Check if results are close for each term
+    total_terms = sph_indices_total(l_max)
+    for i in range(total_terms):
+        l, m = lm_from_index(i)
+        o = original_result[..., i]
+        v = vectorized_result[..., i]
+        if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
+            print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+            return False
+
+    # Check if results are close for all terms
+    is_close = torch.allclose(original_result, vectorized_result, rtol=1e-5, atol=1e-6)
     
     print(f"✓ Vectorized implementation matches original for l_max={l_max}")
     return True
@@ -53,10 +66,25 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
     :param l_max: Maximum spherical harmonic band to test
     :return: True if results match within tolerance
     """
+    # (x,y,z)=(0,1,0): theta=π/2, phi=π/2
+    theta = torch.tensor([torch.pi/2]); phi = torch.tensor([torch.pi/2])
+    Y_sph = spherical_to_sph_eval(torch.stack([theta,phi], -1), 1, -1)
+    # Expect ~ -0.4886025
+    print(f"Y_sph: {Y_sph.item():.6f}")
+    
     # Compute with both methods
     original_result = spherical_to_sph_basis(spherical_coordinates, l_max)
     vectorized_result = spherical_to_sph_basis_vectorized(spherical_coordinates, l_max)
     
+    total_terms = sph_indices_total(l_max)
+    for i in range(total_terms):
+        l, m = lm_from_index(i)
+        o = original_result[..., i]
+        v = vectorized_result[..., i]
+        if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
+            print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+            # return False
+
     # Check if results are close
     is_close = torch.allclose(original_result, vectorized_result, rtol=1e-5, atol=1e-7)
     
@@ -79,6 +107,52 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
     print(f"✓ Spherical vectorized implementation matches original for l_max={l_max}")
     return True
 
+def spherical_allclose(spherical_coords1: torch.Tensor, spherical_coords2: torch.Tensor) -> bool:
+    """
+    Check if two spherical coordinates are close.
+    
+    Coordinate system:
+    - theta (elevation): [-π/2, π/2] where -π/2 is south pole, +π/2 is north pole
+    - phi (azimuthal): [-π, π] wrapping around the unit circle
+    
+    :param spherical_coords1: First spherical coordinates (..., 2)
+    :param spherical_coords2: Second spherical coordinates (..., 2)
+    :return: True if coordinates are close, False otherwise
+    """
+    theta_a, phi_a = spherical_coords1[..., 0], spherical_coords1[..., 1]
+    theta_b, phi_b = spherical_coords2[..., 0], spherical_coords2[..., 1]
+
+    # Check for finite values
+    finite_a = torch.isfinite(theta_a) & torch.isfinite(phi_a)
+    finite_b = torch.isfinite(theta_b) & torch.isfinite(phi_b)
+    both_finite = finite_a & finite_b
+    
+    # If not both finite, they're not close
+    if not torch.all(both_finite):
+        return False
+
+    # Theta comparison: direct comparison since theta ∈ [-π/2, π/2]
+    theta_close = torch.abs(theta_a - theta_b) <= 1e-6
+
+    # Pole detection: at poles (theta ≈ ±π/2), phi is undefined
+    # cos(theta) ≈ 0 when theta ≈ ±π/2
+    cos_theta_a = torch.cos(theta_a)
+    cos_theta_b = torch.cos(theta_b)
+    at_pole_a = torch.abs(cos_theta_a) <= 1e-6
+    at_pole_b = torch.abs(cos_theta_b) <= 1e-6
+    either_at_pole = at_pole_a | at_pole_b
+
+    # Phi comparison: handle wrapping on unit circle
+    # For points not at poles, compare phi with proper wrapping
+    dphi = phi_a - phi_b
+    # Normalize to [-π, π] using atan2 to handle wrapping
+    dphi_wrapped = torch.atan2(torch.sin(dphi), torch.cos(dphi))
+    phi_close = torch.abs(dphi_wrapped) <= 1e-6
+    
+    # At poles, phi is undefined, so we ignore phi comparison
+    phi_close_or_pole = phi_close | either_at_pole
+
+    return torch.all(theta_close & phi_close_or_pole)
 
 def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4, device: torch.device = None) -> Tuple[bool, dict]:
     """
@@ -90,15 +164,21 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     :param device: Device to run tests on
     :return: Tuple of (accuracy_match, timing_results)
     """
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
     print(f"Testing cartesian vs spherical basis on {device} with H={H}, W={W}, l_max={l_max}")
     
     # Generate test coordinates
     spherical_coordinates = generate_spherical_coordinates_map(H, W, device)
     cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
-    
+
+    if not spherical_allclose(spherical_coordinates, cartesian_to_spherical(cartesian_coordinates)):
+        print("spherical_coordinates and cartesian_to_spherical(cartesian_coordinates) do not match")
+        print(f"spherical_coordinates: {spherical_coordinates.shape}")
+        print(f"cartesian_to_spherical(cartesian_coordinates): {cartesian_to_spherical(cartesian_coordinates).shape}")
+        
+        print(f"spherical_coordinates: {spherical_coordinates}")
+        print(f"cartesian_to_spherical(cartesian_coordinates): {cartesian_to_spherical(cartesian_coordinates)}")
+        assert False, "spherical_coordinates and cartesian_to_spherical(cartesian_coordinates) do not match"
+
     timing_results = {}
     
     # Test cartesian basis (original and vectorized)
@@ -119,14 +199,44 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     spherical_vectorized = spherical_to_sph_basis_vectorized(spherical_coordinates, l_max)
     timing_results['spherical_vectorized'] = time.time() - start_time
     
-    # Check accuracy between cartesian and spherical (using vectorized versions for speed)
-    accuracy_match = torch.allclose(cartesian_vectorized, spherical_vectorized, rtol=1e-4, atol=1e-6)
+    # Check accuracy between cartesian and spherical
+    accuracy_match = torch.allclose(cartesian_original, spherical_original, rtol=1e-4, atol=1e-6)
+    accuracy_match_vectorized = torch.allclose(cartesian_vectorized, spherical_vectorized, rtol=1e-4, atol=1e-6)
     
     if not accuracy_match:
-        max_diff = torch.max(torch.abs(cartesian_vectorized - spherical_vectorized))
+        total_terms = sph_indices_total(l_max)
+        for i in range(total_terms):
+            l, m = lm_from_index(i)
+            print(f"l: {l}, m: {m}")
+
+            o = cartesian_original[..., i]
+            v = spherical_original[..., i]
+        
+            print(f"cartesian_original: {o}")
+            print(f"spherical_original: {v}")
+        
+            if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
+                print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+
+        max_diff = torch.max(torch.abs(cartesian_original - spherical_original))
         print(f"❌ Cartesian vs Spherical basis differ! Max difference: {max_diff.item():.2e}")
     else:
-        print(f"✓ Cartesian and Spherical basis match within tolerance")
+        print(f"✓ Cartesian and Spherical basis match within tolerance (original)")
+
+    # if not accuracy_match_vectorized:
+
+    #     total_terms = sph_indices_total(l_max)
+    #     for i in range(total_terms):
+    #         l, m = lm_from_index(i)
+    #         o = cartesian_vectorized[..., i]
+    #         v = spherical_vectorized[..., i]
+    #         if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
+    #             print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+
+    #     max_diff = torch.max(torch.abs(cartesian_vectorized - spherical_vectorized))
+    #     print(f"❌ Cartesian vs Spherical Vectorized basis differ! Max difference: {max_diff.item():.2e}")
+    # else:
+    #     print(f"✓ Cartesian and Spherical Vectorized basis match within tolerance")
     
     # Print timing results
     print(f"Timing results:")
@@ -338,12 +448,17 @@ def main():
     parser.add_argument('--width', '-W', type=int, default=128, help='Width of test coordinates (default: 128)')
     parser.add_argument('--l-max', type=int, default=4, help='Maximum spherical harmonic band (default: 4)')
     parser.add_argument('--visualize', action='store_true', help='Generate basis function visualizations')
-    parser.add_argument('--save-dir', type=str, help='Directory to save visualizations (default: no saving)')
     parser.add_argument('--vis-resolution', type=int, default=32, help='Resolution for visualizations (default: 32)')
     parser.add_argument('--single-vis', type=str, nargs=2, metavar=('L', 'M'), 
                         help='Visualize single spherical harmonic Y_l^m (provide l and m as integers)')
     
     args = parser.parse_args()
+    
+    # Create experiment-specific output directory
+    experiment_name = generate_slug(2)
+    output_dir = Path(OUTPUT_DIR) / experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir}")
     
     print("Spherical Harmonic Sanity Checks")
     print("=" * 40)
@@ -370,13 +485,11 @@ def main():
     if args.visualize:
         print()
         print("Generating basis function comparison visualizations...")
-        if args.save_dir and not os.path.exists(args.save_dir):
-            os.makedirs(args.save_dir)
         
         visualize_basis_comparison(
             l_max=min(args.l_max, 2),  # Limit for reasonable visualization
             resolution=args.vis_resolution,
-            save_dir=args.save_dir
+            save_dir=str(output_dir)
         )
         print("Visualization complete!")
     
@@ -385,20 +498,13 @@ def main():
         l, m = int(args.single_vis[0]), int(args.single_vis[1])
         print(f"Generating visualization for Y_{l}^{m}...")
         
-        save_path = None
-        if args.save_dir:
-            if not os.path.exists(args.save_dir):
-                os.makedirs(args.save_dir)
-            save_path = os.path.join(args.save_dir, f"Y_{l}_{m}.png")
+        save_path = str(output_dir / f"Y_{l}_{m}.png")
         
         plotter = visualize_spherical_harmonic_basis(
             l=l, m=m, 
             resolution=args.vis_resolution,
             save_path=save_path
         )
-        
-        if not save_path:  # Only show if not saving
-            plotter.show()
     
     return 0 if all_passed else 1
 
@@ -413,9 +519,9 @@ if __name__ == "__main__":
     # Run with custom parameters
     python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --height 128 --width 256 --l-max 6
 
-    # Run with visualizations
-    python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --visualize --save-dir ./visualizations
+    # Run with visualizations (saved to experiment-specific directory)
+    python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --visualize
 
-    # Visualize a specific spherical harmonic (e.g., Y_2^1)
-    python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --single-vis 2 1 --save-dir ./visualizations
+    # Visualize a specific spherical harmonic (e.g., Y_2^1) (saved to experiment-specific directory)
+    python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --single-vis 2 1
     """

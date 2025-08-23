@@ -59,9 +59,7 @@ def convert_theta(theta:torch.Tensor) -> torch.Tensor:
     [6] ImageYToTheta function
     """
 
-    new_theta = theta + torch.pi/2.0               # move from [pi/2 , -pi/2] --> [pi, 0]
-    new_theta = torch.flip(new_theta, dims=[0])    # move from [pi, 0] --> [0, pi]
-
+    new_theta = theta - torch.pi/2.0               # move from [pi/2 , -pi/2] --> [0, -pi]
     return new_theta
 
 def generate_spherical_coordinates_map(H:int, W:int, device: torch.device = None) -> torch.Tensor:
