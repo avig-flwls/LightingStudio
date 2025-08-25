@@ -6,6 +6,10 @@ import math
 from ..utils import generate_spherical_coordinates_map, spherical_to_cartesian, pixel_solid_angles, convert_theta
 
 
+# -----------------------------
+# Cartesian to Spherical Harmonic Basis
+# -----------------------------
+
 def cartesian_to_sph_eval(cartesian_coordinates: torch.Tensor, l:int, m:int) -> torch.Tensor:  # noqa: E741
     """
     
@@ -245,7 +249,9 @@ def cartesian_to_sph_basis_vectorized(cartesian_coordinates: torch.Tensor, l_max
     return Ylm
 
 
-
+# -----------------------------
+# Spherical to Spherical Harmonic Basis
+# -----------------------------
 
 def spherical_to_sph_eval(spherical_coordinates: torch.Tensor, l:int, m:int) -> torch.Tensor:  # noqa: E741
     """
@@ -450,77 +456,9 @@ def spherical_to_sph_basis_vectorized(spherical_coordinates: torch.Tensor, l_max
     return Y
 
 
-# def spherical_harmonic_normalization_vectorized(l_max: int, device: torch.device = None) -> torch.Tensor:
-#     """
-#     Precompute normalization constants K(l,m) for all spherical harmonic terms.
-    
-#     :param l_max: Maximum spherical harmonic band
-#     :param device: Device to place tensor on
-#     :return: K values, shape (n_terms,) where n_terms = (l_max+1)^2
-#     """
-#     n_terms = sph_indices_total(l_max)
-#     K = torch.zeros(n_terms, device=device)
-    
-#     for l in range(l_max + 1):  # noqa: E741
-#         for m in range(-l, l + 1):
-#             idx = sph_index_from_lm(l, m)
-#             abs_m = abs(m)
-            
-#             # K(l,m) = sqrt((2*l+1) * (l-|m|)! / (4*pi * (l+|m|)!))
-#             factorial_ratio = math.factorial(l - abs_m) / math.factorial(l + abs_m)
-#             K[idx] = math.sqrt((2 * l + 1) * factorial_ratio / (4 * torch.pi))
-    
-#     return K
-
-
-# def spherical_to_sph_basis_vectorized(spherical_coordinates: torch.Tensor, l_max: int) -> torch.Tensor:
-#     """
-#     GPU-optimized vectorized version of spherical_to_sph_basis that computes all basis functions simultaneously.
-    
-#     :param spherical_coordinates: (..., 2) spherical coordinates (theta, phi)
-#     :param l_max: Maximum number of bands
-#     :return: Ylm (..., n_terms) spherical harmonic basis functions
-#     """
-#     # Extract coordinates
-#     theta, phi = spherical_coordinates[..., 0], spherical_coordinates[..., 1]
-    
-#     # Convert to physics convention and get cosine
-#     cos_theta = torch.cos(convert_theta(theta))
-    
-#     # Compute Associated Legendre polynomials for all (l,m) pairs
-#     P = associated_legendre_polynomial_vectorized(l_max, cos_theta)
-    
-#     # Get normalization constants
-#     K = spherical_harmonic_normalization_vectorized(l_max, device=spherical_coordinates.device)
-    
-#     # Initialize output
-#     shape = spherical_coordinates.shape
-#     n_terms = sph_indices_total(l_max)
-#     Ylm = torch.zeros((*shape[:-1], n_terms), device=spherical_coordinates.device, dtype=spherical_coordinates.dtype)
-    
-#     # Compute spherical harmonics
-#     for l in range(l_max + 1):  # noqa: E741
-#         for m in range(-l, l + 1):
-#             idx = sph_index_from_lm(l, m)
-            
-#             if m == 0:
-#                 # Y_l^0 = K(l,0) * P_l^0(cos_theta)
-#                 Ylm[..., idx] = K[idx] * P[..., idx]
-#             elif m > 0:
-#                 # Y_l^m = sqrt(2) * K(l,m) * cos(m*phi) * P_l^m(cos_theta)
-#                 Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[idx] * torch.cos(m * phi) * P[..., idx]
-#             else:  # m < 0
-#                 # Y_l^m = sqrt(2) * K(l,|m|) * sin(|m|*phi) * P_l^{|m|}(cos_theta)
-#                 abs_m = abs(m)
-#                 abs_m_idx = sph_index_from_lm(l, abs_m)
-#                 Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[abs_m_idx] * torch.sin(abs_m * phi) * P[..., abs_m_idx]
-    
-#     return Ylm
-
-
-
-
-
+# -----------------------------
+# Project Environment Map to Coefficients
+# -----------------------------
 def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Project the Environment Map to get the SPH coefficients.
@@ -566,24 +504,10 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
 
     return sph_coeffs, sph_basis
 
-# def sph_term_within_band(l: int) -> int:  # noqa: E741
-# 	return (l*2)+1
 
-# def sph_indices_total(l_max: int) -> int:
-# 	return (l_max + 1) * (l_max + 1)
-
-# def sph_index_from_lm(l:int, m:int) -> int:
-# 	return l*l+l+m
-
-# def l_from_index(idx:int) -> int:
-# 	return int(np.sqrt(idx))
-
-# def sph_l_max_from_indices_total(n_terms: int) -> int:
-# 	return int(np.sqrt(n_terms) - 1)
-
-# def lm_from_index(idx:int) -> tuple[int, int]:
-# 	return l_from_index(idx), idx - l_from_index(idx) * l_from_index(idx)
-
+# -----------------------------
+# Spherical Harmonic Indexing
+# -----------------------------
 def sph_term_within_band(l: int) -> int:  # (2l + 1)
     return 2 * l + 1
 
