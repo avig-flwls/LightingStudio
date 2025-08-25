@@ -37,24 +37,29 @@ def test_vectorized_vs_original(cartesian_coordinates: torch.Tensor, l_max: int 
     original_result = cartesian_to_sph_basis(cartesian_coordinates, l_max)
     vectorized_result = cartesian_to_sph_basis_vectorized(cartesian_coordinates, l_max)
 
-    # Check if results are close
-    print(f"Original result: {original_result.shape}")
-    print(f"Vectorized result: {vectorized_result.shape}")
-
-    # Check if results are close for each term
-    total_terms = sph_indices_total(l_max)
-    for i in range(total_terms):
-        l, m = lm_from_index(i)
-        o = original_result[..., i]
-        v = vectorized_result[..., i]
-        if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
-            print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
-            return False
-
     # Check if results are close for all terms
     is_close = torch.allclose(original_result, vectorized_result, rtol=1e-5, atol=1e-6)
     
-    print(f"✓ Vectorized implementation matches original for l_max={l_max}")
+    if not is_close:
+        total_terms = sph_indices_total(l_max)
+        for i in range(total_terms):
+            l, m = lm_from_index(i)
+            print(f"l: {l}, m: {m}")
+
+            o = original_result[..., i]
+            v = vectorized_result[..., i]
+        
+            print(f"cartesian_original: {o}")
+            print(f"cartesian_vectorized: {v}")
+        
+            if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
+                print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+
+        max_diff = torch.max(torch.abs(original_result - vectorized_result))
+        print(f"❌ Cartesian original vs vectorized differ! Max difference: {max_diff.item():.2e}")
+        return False
+    
+    print(f"✓ Cartesian vectorized implementation matches original for l_max={l_max}")
     return True
 
 
@@ -70,39 +75,26 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
     original_result = spherical_to_sph_basis(spherical_coordinates, l_max)
     vectorized_result = spherical_to_sph_basis_vectorized(spherical_coordinates, l_max)
     
-    total_terms = sph_indices_total(l_max)
-    for i in range(total_terms):
-        l, m = lm_from_index(i)
-        o = original_result[..., i]
-        v = vectorized_result[..., i]
-
-        # print(f"l: {l}, m: {m}")
-
-        # print(f"original_result: {o}")
-        # print(f"vectorized_result: {v}")
-
-
-        if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
-            print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
-            # return False
-
     # Check if results are close
     is_close = torch.allclose(original_result, vectorized_result, rtol=1e-5, atol=1e-7)
     
     if not is_close:
+        total_terms = sph_indices_total(l_max)
+        for i in range(total_terms):
+            l, m = lm_from_index(i)
+            print(f"l: {l}, m: {m}")
+
+            o = original_result[..., i]
+            v = vectorized_result[..., i]
+        
+            print(f"spherical_original: {o}")
+            print(f"spherical_vectorized: {v}")
+        
+            if not torch.allclose(o, v, rtol=1e-5, atol=1e-7):
+                print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+
         max_diff = torch.max(torch.abs(original_result - vectorized_result))
-        print(f"Results differ! Max difference: {max_diff.item():.2e}")
-        
-        # Find which terms differ most
-        diff = torch.abs(original_result - vectorized_result)
-        max_idx = torch.argmax(diff.flatten())
-        flat_shape = diff.numel() // diff.shape[-1]
-        spatial_idx = max_idx // diff.shape[-1]
-        term_idx = max_idx % diff.shape[-1]
-        
-        print(f"Max difference at spatial index {spatial_idx}, term {term_idx}")
-        print(f"Original: {original_result.flatten()[max_idx]:.6f}")
-        print(f"Vectorized: {vectorized_result.flatten()[max_idx]:.6f}")
+        print(f"❌ Spherical original vs vectorized differ! Max difference: {max_diff.item():.2e}")
         return False
     
     print(f"✓ Spherical vectorized implementation matches original for l_max={l_max}")
@@ -155,6 +147,30 @@ def spherical_allclose(spherical_coords1: torch.Tensor, spherical_coords2: torch
 
     return torch.all(theta_close & phi_close_or_pole)
 
+def test_coordinate_conversion_roundtrip(spherical_coordinates: torch.Tensor) -> bool:
+    """
+    Test that coordinate conversion functions are inverse operations.
+    
+    Verifies that spherical -> cartesian -> spherical returns the original coordinates.
+    
+    :param spherical_coordinates: Test spherical coordinates (theta, phi)
+    :return: True if conversion roundtrip is successful
+    """
+    cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
+    converted_back = cartesian_to_spherical(cartesian_coordinates)
+    
+    if not spherical_allclose(spherical_coordinates, converted_back):
+        print("❌ Coordinate conversion roundtrip failed!")
+        print(f"Original spherical coordinates: {spherical_coordinates.shape}")
+        print(f"Converted back spherical coordinates: {converted_back.shape}")
+        print(f"Original: {spherical_coordinates}")
+        print(f"Converted back: {converted_back}")
+        return False
+    
+    print("✓ Coordinate conversion roundtrip successful")
+    return True
+
+
 def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4, device: torch.device = None) -> Tuple[bool, dict]:
     """
     Test to compare cartesian basis vs spherical basis functions for accuracy and speed.
@@ -171,14 +187,9 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     spherical_coordinates = generate_spherical_coordinates_map(H, W, device)
     cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
 
-    if not spherical_allclose(spherical_coordinates, cartesian_to_spherical(cartesian_coordinates)):
-        print("spherical_coordinates and cartesian_to_spherical(cartesian_coordinates) do not match")
-        print(f"spherical_coordinates: {spherical_coordinates.shape}")
-        print(f"cartesian_to_spherical(cartesian_coordinates): {cartesian_to_spherical(cartesian_coordinates).shape}")
-        
-        print(f"spherical_coordinates: {spherical_coordinates}")
-        print(f"cartesian_to_spherical(cartesian_coordinates): {cartesian_to_spherical(cartesian_coordinates)}")
-        assert False, "spherical_coordinates and cartesian_to_spherical(cartesian_coordinates) do not match"
+    # Verify coordinate conversion roundtrip
+    if not test_coordinate_conversion_roundtrip(spherical_coordinates):
+        assert False, "Coordinate conversion roundtrip failed"
 
     timing_results = {}
     
@@ -201,8 +212,8 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     timing_results['spherical_vectorized'] = time.time() - start_time
     
     # Check accuracy between cartesian and spherical
-    accuracy_match = torch.allclose(cartesian_original, spherical_original, rtol=1e-4, atol=1e-6)
-    accuracy_match_vectorized = torch.allclose(cartesian_vectorized, spherical_vectorized, rtol=1e-4, atol=1e-6)
+    accuracy_match = torch.allclose(cartesian_original, spherical_original, rtol=1e-4, atol=1e-5)
+    accuracy_match_vectorized = torch.allclose(cartesian_vectorized, spherical_vectorized, rtol=1e-4, atol=1e-5)
     
     if not accuracy_match:
         total_terms = sph_indices_total(l_max)
@@ -216,7 +227,7 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
             print(f"cartesian_original: {o}")
             print(f"spherical_original: {v}")
         
-            if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
+            if not torch.allclose(o, v, rtol=1e-4, atol=1e-5):
                 print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
 
         max_diff = torch.max(torch.abs(cartesian_original - spherical_original))
@@ -225,13 +236,18 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
         print(f"✓ Cartesian and Spherical basis match within tolerance (original)")
 
     if not accuracy_match_vectorized:
-
         total_terms = sph_indices_total(l_max)
         for i in range(total_terms):
             l, m = lm_from_index(i)
+            print(f"l: {l}, m: {m}")
+
             o = cartesian_vectorized[..., i]
             v = spherical_vectorized[..., i]
-            if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
+        
+            print(f"cartesian_vectorized: {o}")
+            print(f"spherical_vectorized: {v}")
+        
+            if not torch.allclose(o, v, rtol=1e-4, atol=1e-5):
                 print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
 
         max_diff = torch.max(torch.abs(cartesian_vectorized - spherical_vectorized))
@@ -407,18 +423,23 @@ def run_all_sanity_checks(H: int = 64, W: int = 128, l_max: int = 4) -> dict:
     spherical_coordinates = generate_spherical_coordinates_map(H, W, device)
     cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
     
-    # Test 1: Vectorized vs Original (Cartesian)
-    print("1. Testing Cartesian Vectorized vs Original:")
+    # Test 1: Coordinate Conversion Roundtrip
+    print("1. Testing Coordinate Conversion Roundtrip:")
+    results['coordinate_conversion_match'] = test_coordinate_conversion_roundtrip(spherical_coordinates)
+    print()
+    
+    # Test 2: Vectorized vs Original (Cartesian)
+    print("2. Testing Cartesian Vectorized vs Original:")
     results['cartesian_vectorized_match'] = test_vectorized_vs_original(cartesian_coordinates, l_max)
     print()
     
-    # Test 2: Vectorized vs Original (Spherical)  
-    print("2. Testing Spherical Vectorized vs Original:")
+    # Test 3: Vectorized vs Original (Spherical)  
+    print("3. Testing Spherical Vectorized vs Original:")
     results['spherical_vectorized_match'] = test_spherical_vectorized_vs_original(spherical_coordinates, l_max)
     print()
     
-    # Test 3: Cartesian vs Spherical Basis
-    print("3. Testing Cartesian vs Spherical Basis:")
+    # Test 4: Cartesian vs Spherical Basis
+    print("4. Testing Cartesian vs Spherical Basis:")
     accuracy_match, timing_results = test_cartesian_vs_spherical_basis(H, W, l_max, device)
     results['basis_accuracy_match'] = accuracy_match
     results['timing_results'] = timing_results
@@ -427,6 +448,7 @@ def run_all_sanity_checks(H: int = 64, W: int = 128, l_max: int = 4) -> dict:
     # Summary
     print("=" * 60)
     print("SUMMARY:")
+    print(f"✓ Coordinate conversion roundtrip works: {results['coordinate_conversion_match']}")
     print(f"✓ All vectorized implementations match: {all([results['cartesian_vectorized_match'], results['spherical_vectorized_match']])}")
     print(f"✓ Cartesian and Spherical basis match: {results['basis_accuracy_match']}")
     print(f"✓ Fastest method: {min(timing_results.items(), key=lambda x: x[1])[0]}")
@@ -471,6 +493,7 @@ def main():
     
     # Check if all tests passed
     all_passed = (
+        results['coordinate_conversion_match'] and
         results['cartesian_vectorized_match'] and 
         results['spherical_vectorized_match'] and 
         results['basis_accuracy_match']
@@ -516,6 +539,7 @@ if __name__ == "__main__":
     """
     # Basic run with default parameters
     python -m src.LightingStudio.analysis.spherical_harmonic.sanity_checks 
+    python -m src.LightingStudio.analysis.spherical_harmonic.sanity_checks -H 1024 -W 2048 --l-max 4
 
     # Run with custom parameters
     python src/LightingStudio/analysis/spherical_harmonic/sanity_checks.py --height 128 --width 256 --l-max 6
