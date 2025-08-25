@@ -32,6 +32,34 @@ class SampleGPU:
 
 
 @dataclass
+class SPHMetrics:
+    """A report for the lighting analysis."""
+    sph_coeffs: torch.Tensor # Spherical Harmonic Coefficients (n_terms, 3) 
+
+    # Dominant Direction (all normalized)
+    dominant_direction: torch.Tensor # Dominant Direction (xyz)
+    dominant_direction_rgb_grayscale: torch.Tensor # Dominant Direction (rgb) based on grayscale
+    dominant_direction_rgb_luminance: torch.Tensor # Dominant Direction (rgb) based on luminance
+
+    # Dominant Direction in Pixel Space
+    dominant_pixel: torch.Tensor # Dominant Pixel (uv)
+    dominant_pixel_rgb_grayscale: torch.Tensor # Dominant Pixel (rgb) based on grayscale
+    dominant_pixel_rgb_luminance: torch.Tensor # Dominant Pixel (rgb) based on luminance
+
+    # Dominant Color
+    dominant_color: torch.Tensor # Dominant Color (rgb) based on sph coeffs
+    dominant_color_rgb_grayscale: torch.Tensor # Dominant Color (rgb) based on grayscale
+    dominant_color_rgb_luminance: torch.Tensor # Dominant Color (rgb) based on luminance
+
+    # Approximate Env Map
+    approximate_env_map: torch.Tensor # Approximate Env Map (rgb)
+
+    # Intensity
+    area_intensity: torch.Tensor # Area Intensity (rgb)
+    point_intensity: torch.Tensor # Point Intensity (rgb)
+
+
+@dataclass
 class SampleCPU:
     """A light sample generated from HDRI analysis with CPU/serializable data."""
     direction: List[float]  # Unit direction vector [x, y, z] as list

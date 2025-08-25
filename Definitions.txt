@@ -120,9 +120,7 @@ Future Directions:
         Deep Parametric Indoor Lighting Estimation
 
 
-1. Check if spherical and cartesian graphs match.
-2. make it faster and vectoriezed
-3. plot all colors and directions, both in hdri and flat
+1. create common report dataclass and html viewer.
 4. demarcate new vs prior analysis.
 5. Download source code and put here for reference for .js
 """
