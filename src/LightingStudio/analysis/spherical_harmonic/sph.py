@@ -346,131 +346,176 @@ def spherical_to_sph_basis(spherical_coordinates: torch.Tensor, l_max: int) -> t
     return Ylm
 
 
-def associated_legendre_polynomial_vectorized(l_max: int, cos_theta: torch.Tensor) -> torch.Tensor:
-    """
-    Vectorized computation of Associated Legendre polynomials for all (l,m) pairs up to l_max.
-    
-    :param l_max: Maximum spherical harmonic band
-    :param cos_theta: Cosine of polar angle, shape (...,)
-    :return: P_lm values, shape (..., n_terms) where n_terms = (l_max+1)^2
-    """
-    shape = cos_theta.shape
-    device = cos_theta.device
-    dtype = cos_theta.dtype
-    
-    # Initialize output tensor
-    n_terms = sph_indices_total(l_max)
-    P = torch.zeros((*shape, n_terms), device=device, dtype=dtype)
-    
-    # Precompute sin_theta for efficiency
-    sin_theta = torch.sqrt(1 - cos_theta * cos_theta)
-    
-    # l=0, m=0: P_0^0 = 1
-    if l_max >= 0:
-        P[..., sph_index_from_lm(0, 0)] = 1.0
-    
-    # l=1 terms
-    if l_max >= 1:
-        P[..., sph_index_from_lm(1, -1)] = sin_theta      # P_1^1
-        P[..., sph_index_from_lm(1, 0)] = cos_theta       # P_1^0  
-        P[..., sph_index_from_lm(1, 1)] = sin_theta       # P_1^1 (same as P_1^{-1})
-    
-    # Higher order terms using recurrence relations
-    for l in range(2, l_max + 1):  # noqa: E741
-        # For m = l (diagonal terms): P_l^l = (-1)^l * (2l-1)!! * sin^l(theta)
-        if l <= l_max:
-            # Compute (2l-1)!! = 1*3*5*...*(2l-1)
-            double_factorial = 1.0
-            for i in range(1, l + 1):
-                double_factorial *= (2 * i - 1)
-            
-            sign = (-1) ** l
-            P[..., sph_index_from_lm(l, l)] = sign * double_factorial * (sin_theta ** l)
-            P[..., sph_index_from_lm(l, -l)] = P[..., sph_index_from_lm(l, l)]  # P_l^{-l} = P_l^l
-        
-        # For m = l-1: P_l^{l-1} = cos_theta * (2l-1) * P_{l-1}^{l-1}
-        if l >= 1:
-            P[..., sph_index_from_lm(l, l-1)] = cos_theta * (2*l - 1) * P[..., sph_index_from_lm(l-1, l-1)]
-            P[..., sph_index_from_lm(l, -(l-1))] = P[..., sph_index_from_lm(l, l-1)]  # P_l^{-(l-1)} = P_l^{l-1}
-        
-        # For m < l-1: Use three-term recurrence relation
-        # P_l^m = ((2l-1)*cos_theta*P_{l-1}^m - (l+m-1)*P_{l-2}^m) / (l-m)
-        for m in range(l-2, -1, -1):
-            if l >= 2:
-                numerator = (2*l - 1) * cos_theta * P[..., sph_index_from_lm(l-1, m)] - (l + m - 1) * P[..., sph_index_from_lm(l-2, m)]
-                P[..., sph_index_from_lm(l, m)] = numerator / (l - m)
-                if m > 0:
-                    P[..., sph_index_from_lm(l, -m)] = P[..., sph_index_from_lm(l, m)]
-    
-    return P
-
-
-def spherical_harmonic_normalization_vectorized(l_max: int, device: torch.device = None) -> torch.Tensor:
-    """
-    Precompute normalization constants K(l,m) for all spherical harmonic terms.
-    
-    :param l_max: Maximum spherical harmonic band
-    :param device: Device to place tensor on
-    :return: K values, shape (n_terms,) where n_terms = (l_max+1)^2
-    """
-    n_terms = sph_indices_total(l_max)
-    K = torch.zeros(n_terms, device=device)
-    
-    for l in range(l_max + 1):  # noqa: E741
-        for m in range(-l, l + 1):
-            idx = sph_index_from_lm(l, m)
-            abs_m = abs(m)
-            
-            # K(l,m) = sqrt((2*l+1) * (l-|m|)! / (4*pi * (l+|m|)!))
-            factorial_ratio = math.factorial(l - abs_m) / math.factorial(l + abs_m)
-            K[idx] = math.sqrt((2 * l + 1) * factorial_ratio / (4 * torch.pi))
-    
-    return K
-
-
 def spherical_to_sph_basis_vectorized(spherical_coordinates: torch.Tensor, l_max: int) -> torch.Tensor:
     """
-    GPU-optimized vectorized version of spherical_to_sph_basis that computes all basis functions simultaneously.
-    
-    :param spherical_coordinates: (..., 2) spherical coordinates (theta, phi)
-    :param l_max: Maximum number of bands
-    :return: Ylm (..., n_terms) spherical harmonic basis functions
+    Vectorized real spherical harmonics Y_l^m for all (l,m) up to l_max.
+
+    Input angles follow your convention:
+      θ = elevation in [-π/2, π/2], φ = azimuth in (−π, π].
+    Internally: cosΘ = cos(convert_theta(θ))  (so cosΘ = sin(elevation) with your converter).
+
+    Real basis:
+      Y_l^0    =  K(l,0) P_l^0(cosΘ)
+      Y_l^m    =  √2 K(l,m) cos(mφ) P_l^m(cosΘ),              m > 0
+      Y_l^{−m} =  √2 K(l,m) sin(mφ) P_l^m(cosΘ),              m > 0
+
+    P_l^m includes Condon–Shortley phase.
     """
-    # Extract coordinates
-    theta, phi = spherical_coordinates[..., 0], spherical_coordinates[..., 1]
-    
-    # Convert to physics convention and get cosine
-    cos_theta = torch.cos(convert_theta(theta))
-    
-    # Compute Associated Legendre polynomials for all (l,m) pairs
-    P = associated_legendre_polynomial_vectorized(l_max, cos_theta)
-    
-    # Get normalization constants
-    K = spherical_harmonic_normalization_vectorized(l_max, device=spherical_coordinates.device)
-    
-    # Initialize output
-    shape = spherical_coordinates.shape
+    import math
+
+    def _norm_constants(l_max: int, device, dtype) -> torch.Tensor:
+        n_terms = sph_indices_total(l_max)
+        K = torch.zeros(n_terms, device=device, dtype=dtype)
+        sqrt4pi = math.sqrt(4.0 * math.pi)
+        for l in range(l_max + 1):
+            for m in range(-l, l + 1):
+                idx = sph_index_from_lm(l, m)
+                a = abs(m)
+                fr = math.factorial(l - a) / math.factorial(l + a)
+                K[idx] = math.sqrt((2 * l + 1) * fr) / sqrt4pi
+        return K
+
+    def _associated_legendre_all(l_max: int, x: torch.Tensor) -> torch.Tensor:
+        """
+        Compute P_l^m(x) for all 0<=m<=l<=l_max (vectorized).
+        Includes CS phase:
+          P_m^m = (-1)^m (2m-1)!! (1-x^2)^{m/2}
+          P_{m+1}^m = (2m+1) x P_m^m
+          P_l^m = ((2l-1) x P_{l-1}^m - (l+m-1) P_{l-2}^m) / (l-m)  for l>=m+2
+        We only fill m>=0 entries; negative-m aren’t needed for P in the real basis.
+        """
+        shape = x.shape
+        device, dtype = x.device, x.dtype
+        n_terms = sph_indices_total(l_max)
+        P = torch.zeros((*shape, n_terms), device=device, dtype=dtype)
+
+        # robust sinΘ from x=cosΘ
+        sin_th = torch.sqrt((1 - x).clamp_min(0) * (1 + x).clamp_min(0))
+
+        # l=0, m=0
+        P[..., sph_index_from_lm(0, 0)] = 1.0
+
+        # *** Seed P_1^0 as well (m=0 case): P_{0+1}^0 = (2*0+1) * x * P_0^0 = x
+        if l_max >= 1:
+            P[..., sph_index_from_lm(1, 0)] = x
+
+        # Diagonals P_m^m and next band P_{m+1}^m for m>=1
+        for m in range(1, l_max + 1):
+            df = 1.0
+            for i in range(1, m + 1):
+                df *= (2 * i - 1)  # (2m-1)!!
+            P_mm = ((-1.0) ** m) * df * (sin_th ** m)
+            P[..., sph_index_from_lm(m, m)] = P_mm
+            if m < l_max:
+                P[..., sph_index_from_lm(m + 1, m)] = (2 * m + 1) * x * P_mm
+
+        # Three-term recurrence for l >= m+2, all m>=0
+        for m in range(0, l_max + 1):
+            for l in range(m + 2, l_max + 1):
+                idx_lm  = sph_index_from_lm(l, m)
+                idx_l1m = sph_index_from_lm(l - 1, m)
+                idx_l2m = sph_index_from_lm(l - 2, m)
+                P[..., idx_lm] = ((2 * l - 1) * x * P[..., idx_l1m] - (l + m - 1) * P[..., idx_l2m]) / (l - m)
+        return P
+
+    # ---- compute ----
+    theta = spherical_coordinates[..., 0]  # elevation
+    phi   = spherical_coordinates[..., 1]  # azimuth
+    device, dtype = theta.device, theta.dtype
+
+    # cosΘ via your converter (Θ = θ - π/2; cos(Θ) = sin(θ))
+    x = torch.cos(convert_theta(theta))
+
+    # P_l^m(cosΘ) for m>=0, and normalization constants
+    P = _associated_legendre_all(l_max, x)
+    K = _norm_constants(l_max, device=device, dtype=dtype)
+
+    # Build Y
     n_terms = sph_indices_total(l_max)
-    Ylm = torch.zeros((*shape[:-1], n_terms), device=spherical_coordinates.device, dtype=spherical_coordinates.dtype)
+    Y = torch.zeros((*spherical_coordinates.shape[:-1], n_terms), device=device, dtype=dtype)
+    sqrt2 = math.sqrt(2.0)
+
+    for l in range(l_max + 1):
+        # m = 0
+        idx0 = sph_index_from_lm(l, 0)
+        Y[..., idx0] = K[idx0] * P[..., idx0]
+        # m > 0 (reuse |m| for P and K)
+        for m in range(1, l + 1):
+            idx_pos = sph_index_from_lm(l,  m)
+            idx_neg = sph_index_from_lm(l, -m)
+            common  = K[idx_pos] * P[..., idx_pos]  # P_l^{m} with m>=0
+            Y[..., idx_pos] = sqrt2 * common * torch.cos(m * phi)
+            Y[..., idx_neg] = sqrt2 * common * torch.sin(m * phi)
+
+    return Y
+
+
+# def spherical_harmonic_normalization_vectorized(l_max: int, device: torch.device = None) -> torch.Tensor:
+#     """
+#     Precompute normalization constants K(l,m) for all spherical harmonic terms.
     
-    # Compute spherical harmonics
-    for l in range(l_max + 1):  # noqa: E741
-        for m in range(-l, l + 1):
-            idx = sph_index_from_lm(l, m)
+#     :param l_max: Maximum spherical harmonic band
+#     :param device: Device to place tensor on
+#     :return: K values, shape (n_terms,) where n_terms = (l_max+1)^2
+#     """
+#     n_terms = sph_indices_total(l_max)
+#     K = torch.zeros(n_terms, device=device)
+    
+#     for l in range(l_max + 1):  # noqa: E741
+#         for m in range(-l, l + 1):
+#             idx = sph_index_from_lm(l, m)
+#             abs_m = abs(m)
             
-            if m == 0:
-                # Y_l^0 = K(l,0) * P_l^0(cos_theta)
-                Ylm[..., idx] = K[idx] * P[..., idx]
-            elif m > 0:
-                # Y_l^m = sqrt(2) * K(l,m) * cos(m*phi) * P_l^m(cos_theta)
-                Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[idx] * torch.cos(m * phi) * P[..., idx]
-            else:  # m < 0
-                # Y_l^m = sqrt(2) * K(l,|m|) * sin(|m|*phi) * P_l^{|m|}(cos_theta)
-                abs_m = abs(m)
-                abs_m_idx = sph_index_from_lm(l, abs_m)
-                Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[abs_m_idx] * torch.sin(abs_m * phi) * P[..., abs_m_idx]
+#             # K(l,m) = sqrt((2*l+1) * (l-|m|)! / (4*pi * (l+|m|)!))
+#             factorial_ratio = math.factorial(l - abs_m) / math.factorial(l + abs_m)
+#             K[idx] = math.sqrt((2 * l + 1) * factorial_ratio / (4 * torch.pi))
     
-    return Ylm
+#     return K
+
+
+# def spherical_to_sph_basis_vectorized(spherical_coordinates: torch.Tensor, l_max: int) -> torch.Tensor:
+#     """
+#     GPU-optimized vectorized version of spherical_to_sph_basis that computes all basis functions simultaneously.
+    
+#     :param spherical_coordinates: (..., 2) spherical coordinates (theta, phi)
+#     :param l_max: Maximum number of bands
+#     :return: Ylm (..., n_terms) spherical harmonic basis functions
+#     """
+#     # Extract coordinates
+#     theta, phi = spherical_coordinates[..., 0], spherical_coordinates[..., 1]
+    
+#     # Convert to physics convention and get cosine
+#     cos_theta = torch.cos(convert_theta(theta))
+    
+#     # Compute Associated Legendre polynomials for all (l,m) pairs
+#     P = associated_legendre_polynomial_vectorized(l_max, cos_theta)
+    
+#     # Get normalization constants
+#     K = spherical_harmonic_normalization_vectorized(l_max, device=spherical_coordinates.device)
+    
+#     # Initialize output
+#     shape = spherical_coordinates.shape
+#     n_terms = sph_indices_total(l_max)
+#     Ylm = torch.zeros((*shape[:-1], n_terms), device=spherical_coordinates.device, dtype=spherical_coordinates.dtype)
+    
+#     # Compute spherical harmonics
+#     for l in range(l_max + 1):  # noqa: E741
+#         for m in range(-l, l + 1):
+#             idx = sph_index_from_lm(l, m)
+            
+#             if m == 0:
+#                 # Y_l^0 = K(l,0) * P_l^0(cos_theta)
+#                 Ylm[..., idx] = K[idx] * P[..., idx]
+#             elif m > 0:
+#                 # Y_l^m = sqrt(2) * K(l,m) * cos(m*phi) * P_l^m(cos_theta)
+#                 Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[idx] * torch.cos(m * phi) * P[..., idx]
+#             else:  # m < 0
+#                 # Y_l^m = sqrt(2) * K(l,|m|) * sin(|m|*phi) * P_l^{|m|}(cos_theta)
+#                 abs_m = abs(m)
+#                 abs_m_idx = sph_index_from_lm(l, abs_m)
+#                 Ylm[..., idx] = torch.sqrt(torch.tensor(2.0)) * K[abs_m_idx] * torch.sin(abs_m * phi) * P[..., abs_m_idx]
+    
+#     return Ylm
 
 
 

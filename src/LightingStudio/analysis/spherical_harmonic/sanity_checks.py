@@ -66,12 +66,6 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
     :param l_max: Maximum spherical harmonic band to test
     :return: True if results match within tolerance
     """
-    # (x,y,z)=(0,1,0): theta=π/2, phi=π/2
-    theta = torch.tensor([torch.pi/2]); phi = torch.tensor([torch.pi/2])
-    Y_sph = spherical_to_sph_eval(torch.stack([theta,phi], -1), 1, -1)
-    # Expect ~ -0.4886025
-    print(f"Y_sph: {Y_sph.item():.6f}")
-    
     # Compute with both methods
     original_result = spherical_to_sph_basis(spherical_coordinates, l_max)
     vectorized_result = spherical_to_sph_basis_vectorized(spherical_coordinates, l_max)
@@ -81,6 +75,13 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
         l, m = lm_from_index(i)
         o = original_result[..., i]
         v = vectorized_result[..., i]
+
+        # print(f"l: {l}, m: {m}")
+
+        # print(f"original_result: {o}")
+        # print(f"vectorized_result: {v}")
+
+
         if not torch.allclose(o, v, rtol=1e-5, atol=1e-6):
             print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
             # return False
@@ -223,20 +224,20 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     else:
         print(f"✓ Cartesian and Spherical basis match within tolerance (original)")
 
-    # if not accuracy_match_vectorized:
+    if not accuracy_match_vectorized:
 
-    #     total_terms = sph_indices_total(l_max)
-    #     for i in range(total_terms):
-    #         l, m = lm_from_index(i)
-    #         o = cartesian_vectorized[..., i]
-    #         v = spherical_vectorized[..., i]
-    #         if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
-    #             print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
+        total_terms = sph_indices_total(l_max)
+        for i in range(total_terms):
+            l, m = lm_from_index(i)
+            o = cartesian_vectorized[..., i]
+            v = spherical_vectorized[..., i]
+            if not torch.allclose(o, v, rtol=1e-4, atol=1e-6):
+                print(f"Results differ for term {i} (Y_{l}^{m})! Max difference: {torch.max(torch.abs(o - v)).item():.2e}")
 
-    #     max_diff = torch.max(torch.abs(cartesian_vectorized - spherical_vectorized))
-    #     print(f"❌ Cartesian vs Spherical Vectorized basis differ! Max difference: {max_diff.item():.2e}")
-    # else:
-    #     print(f"✓ Cartesian and Spherical Vectorized basis match within tolerance")
+        max_diff = torch.max(torch.abs(cartesian_vectorized - spherical_vectorized))
+        print(f"❌ Cartesian vs Spherical Vectorized basis differ! Max difference: {max_diff.item():.2e}")
+    else:
+        print(f"✓ Cartesian and Spherical Vectorized basis match within tolerance")
     
     # Print timing results
     print(f"Timing results:")
