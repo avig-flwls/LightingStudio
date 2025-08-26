@@ -3,9 +3,10 @@ from einops import rearrange, repeat
 
 from src.LightingStudio.analysis.spherical_harmonic.sph import project_env_to_coefficients, project_direction_into_coefficients, sph_l_max_from_indices_total, l_from_index, sph_indices_total
 from src.LightingStudio.analysis.utils import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map
+from src.LightingStudio.analysis.datatypes import SPHMetrics
+from src.LightingStudio.analysis.utils import cartesian_to_pixel
 
-
-def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     TODO: think about what about returning dominant direction in r, g, b directly and not adding them together???
 
@@ -13,10 +14,9 @@ def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, tor
     
     :params sph_coeffs: (n_terms, 3) where each column is r, g, b
 
-    :return dominant_direction: (3) the dominant direction in xyz coordinate 
     :return dominant_direction_normalized: (3) the dominant direction (with vector norm)
-    :return dominant_direction_rgb: (3) the dominant direction with (rgb scaling constants source unknown...)
     :return dominant_direction_rgb_normalized: (3) the dominant direction rgb (with vector norm)
+    :return dominant_direction_rgb_luminance_normalized: (3) the dominant direction rgb (with vector norm)
     
     Source: 
     [7] Section 3.3 NOT [2] page 4
@@ -36,21 +36,29 @@ def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, tor
     green_band_aligned_xyz = torch.tensor([-green_band_1[2],-green_band_1[0],green_band_1[1]])
     blue_band_aligned_xyz = torch.tensor([-blue_band_1[2],-blue_band_1[0],blue_band_1[1]])
 
-
+    # Dominant Direction in xyz coordinate
     dominant_direction = red_band_aligned_xyz + blue_band_aligned_xyz + green_band_aligned_xyz
-    
+    dominant_direction_normalized = dominant_direction/torch.linalg.norm(dominant_direction)
+
+    # Dominant Direction in rgb coordinate color_difference 
     red_constant = 0.3
     green_constant = 0.59
     blue_constant = 0.11
 
-    dominant_direction_rgb =    red_constant * dominant_direction + \
-                                green_constant * green_band_aligned_xyz + \
-                                blue_constant * blue_band_aligned_xyz
+    dominant_direction_rgb_color_difference = torch.tensor([red_constant, green_constant, blue_constant]) * dominant_direction
+    dominant_direction_rgb_color_difference_normalized = dominant_direction_rgb_color_difference/torch.linalg.norm(dominant_direction_rgb_color_difference)
 
-    return (dominant_direction, 
-            dominant_direction/torch.linalg.norm(dominant_direction), 
-            dominant_direction_rgb, 
-            dominant_direction_rgb/torch.linalg.norm(dominant_direction_rgb))
+    # Dominant Direction in rgb coordinate luminance
+    red_constant = 0.2126
+    green_constant = 0.7152
+    blue_constant = 0.0722
+
+    dominant_direction_rgb_luminance = torch.tensor([red_constant, green_constant, blue_constant]) * dominant_direction
+    dominant_direction_rgb_luminance_normalized = dominant_direction_rgb_luminance/torch.linalg.norm(dominant_direction_rgb_luminance)
+
+    return (dominant_direction_normalized, 
+            dominant_direction_rgb_color_difference_normalized,
+            dominant_direction_rgb_luminance_normalized)
 
 def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: torch.Tensor) -> torch.Tensor:
     """
@@ -80,52 +88,16 @@ def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: tor
 
     # TODO: maybe we need to normalize the light??
     # direction_sph_coeffs *= (16*np.pi)/17
-    denominator = np.dot(direction_sph_coeffs, direction_sph_coeffs)
+    denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
 
     color = torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
                       torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
                       torch.dot(sph_coeffs_b, direction_sph_coeffs) / denominator])
     
+    color = torch.clamp(color, 0, 255)
     return color
 
-
-def get_approximate_env_map(H:int, W:int, cartesian_direction: torch.Tensor, color: torch.Tensor) -> torch.Tensor:
-    """
-    Approximate directional light as if it were in an environment map.
-    
-    This means it is black (0's) for all pixels except for one which has all the color. It does
-    this by find the pixel index that the cartesian_direction maps to.
-    
-    : params H:
-    : params W:
-    : params cartesian_direction: (3)
-    
-    : returns env_map: (H, W, 3)
-    """
-
-    cartesian_direction = rearrange(cartesian_direction, "c -> 1 c")    # (1, 3)
-    spherical_direction = cartesian_to_spherical(cartesian_direction)   # (1, 2)
-
-    theta = spherical_direction[0,0]
-    phi = spherical_direction[0,1]
-
-    theta_divisor = torch.pi / H
-    phi_divisor = 2.0*torch.pi / W
-
-    # We just assume that that the cell that the remainder falls in, is the one that has the color.
-    if (theta > torch.pi/2) or (theta < -torch.pi/2):
-        raise ValueError(f'theta: {theta} should be between [-pi/2, pi/2]')
-
-    theta_cell = int(torch.clip(int(H/2) - torch.sign(theta)* torch.abs(theta) / theta_divisor, 0, H - 1)) # NOTE: there is negative sign here because, positive theta angle means we want to move "up" in elevation. 
-    phi_cell = int(torch.clip(int(W/2) + torch.sign(phi)* torch.abs(phi) / phi_divisor, 0, W - 1))
-
-    env_map = torch.zeros((H, W, len(color)))
-    env_map[theta_cell, phi_cell] = color
-
-    return env_map
-
-
-def get_cos_lobe_as_env_map(H:int, W:int) -> torch.Tensor:
+def get_cos_lobe_as_env_map(H:int, W:int, device: torch.device = None) -> torch.Tensor:
     """
     The value of N dot L placed in an environment map.
     
@@ -135,7 +107,7 @@ def get_cos_lobe_as_env_map(H:int, W:int) -> torch.Tensor:
     [7] cosine_lobe definition.
     """
 
-    spherical_coordinates = generate_spherical_coordinates_map(H,W) # (H, W, 2)
+    spherical_coordinates = generate_spherical_coordinates_map(H,W, device=device) # (H, W, 2)
     theta = spherical_coordinates[..., 0]                           # (H, W)
     theta = convert_theta(theta)                                    # (H, W)
 
@@ -188,43 +160,10 @@ def get_area_normalization_term(env_map_sph_coeffs : torch.Tensor, cos_lobe_sph_
     area_intensity = torch.sum(torch.multiply(env_map_sph_coeffs, rotated_cos_lobe_sph_coeffs), axis=0)  # (3)
     return area_intensity
 
-def get_point_normalization_term(dominant_direction: torch.Tensor) -> torch.Tensor:
+def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
     """
-    WARNING: This was not implemented because [0,1] lighting was not being used...
+    Get the SPH metrics for the environment map.
 
-
-    Find the "normalization term"
-    
-    
-    Definition:
-        Mathematically:
-
-        
-        Physically:
-
-
-    
-    Steps:
-        1. 
-
-
-    : params dominant_direction: (3,)
-    : return normalization_term: (3,) one for each color (r, g, b) = (c_light_r, c_light_g, c_light_b)
-
-    
-
-    Source:
-    [8] Extracting dominant light intensity section
-    [10] Punctual Light Sources section and Equation 9
-    """
-
-    optional_lambertian_scalar = 1/torch.pi
-    c = 1
-
-    return c
-
-def extract_single_light_no_ambient(env_map: torch.Tensor, l_max: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
     Extract Single Light Direction, Single Light Intensity, Single Light Color (SLNA).
 
     We are constructing a new lighting source.
@@ -237,11 +176,9 @@ def extract_single_light_no_ambient(env_map: torch.Tensor, l_max: int) -> tuple[
     3. Get Dominant Light Color
 
     
-    : params
-
-    : returns chosen_direction: (3) this is the dominant direction (which might be rgb and normalized)
-    : returns color: (3) This color is NOT between [0, 1]
-    : returns approx_env_map: (H, W, 3) approximate directional light as if it were in an environment map 
+    : params env_map: (H, W, 3)
+    : params l_max: int
+    : returns sph_metrics: SPHMetrics
 
     Source:
     [8] Full Page
@@ -264,27 +201,41 @@ def extract_single_light_no_ambient(env_map: torch.Tensor, l_max: int) -> tuple[
     So we should instead also try to capture the ambient color or DC term.
     """
 
-    # if l_max > 2:
-    #     raise ValueError(f"l_max for Lighting Analysis is only supported for l_max: {l_max} <= 2")
+    H, W, _ = env_map.shape
 
-    # Get Direction
+    # Get Spherical Harmonic Coefficients
     env_map_sph_coeffs, _ = project_env_to_coefficients(env_map, l_max)
-    dd, dd_norm, dd_rgb, dd_rgb_norm = get_dominant_direction(env_map_sph_coeffs)
-    chosen_direction = dd_rgb_norm
-
-    # Get Color
-    color = get_dominant_color(dominant_direction=chosen_direction, env_map_sph_coeffs=env_map_sph_coeffs)
     
-    # Get Intensity
-    H, W, _ = env_map.shape
-    cos_lobe_env_map = get_cos_lobe_as_env_map(H, W)
+    # Get Dominant Direction
+    dd, dd_rgb_color_difference, dd_rgb_luminance = get_dominant_direction(env_map_sph_coeffs)
 
-    cos_lob_sph_coeffs, _ = project_env_to_coefficients(cos_lobe_env_map, l_max)
-    area_intensity = get_area_normalization_term(env_map_sph_coeffs=env_map_sph_coeffs, cos_lobe_sph_coeffs=cos_lob_sph_coeffs, cartesian_direction=chosen_direction, l_max=l_max)
-    # single_intensity  = 
+    # Get Dominant Pixel
+    dpixel, dpixel_rgb_color_difference, dpixel_rgb_luminance =  cartesian_to_pixel(torch.stack([dd, dd_rgb_color_difference, dd_rgb_luminance], dim=-1), H, W)
 
-    # Approximate Env Map
-    H, W, _ = env_map.shape
-    approx_env_map = get_approximate_env_map(H, W, chosen_direction, color)
+    # Get Dominant Color
+    dcolor = get_dominant_color(dd, env_map_sph_coeffs)
+    dcolor_rgb_color_difference = get_dominant_color(dd_rgb_color_difference, env_map_sph_coeffs)
+    dcolor_rgb_luminance = get_dominant_color(dd_rgb_luminance, env_map_sph_coeffs)
 
-    return chosen_direction, color, area_intensity, approx_env_map
+    # Get Area Intensity
+    cos_lobe_env_map = get_cos_lobe_as_env_map(H, W, device=env_map.device)
+    cos_lobe_sph_coeffs, _ = project_env_to_coefficients(cos_lobe_env_map, l_max)
+
+    area_intensity = get_area_normalization_term(env_map_sph_coeffs, cos_lobe_sph_coeffs, cartesian_direction=dd, l_max=l_max)
+    area_intensity_rgb_color_difference = get_area_normalization_term(env_map_sph_coeffs, cos_lobe_sph_coeffs, cartesian_direction=dd_rgb_color_difference, l_max=l_max)
+    area_intensity_rgb_luminance = get_area_normalization_term(env_map_sph_coeffs, cos_lobe_sph_coeffs, cartesian_direction=dd_rgb_luminance, l_max=l_max)
+
+    return SPHMetrics(
+        sph_coeffs=env_map_sph_coeffs,
+        dominant_direction=dd,
+        dominant_direction_rgb_color_difference=dd_rgb_color_difference,
+        dominant_direction_rgb_luminance=dd_rgb_luminance,
+        dominant_pixel=dpixel,
+        dominant_pixel_rgb_color_difference=dpixel_rgb_color_difference,
+        dominant_pixel_rgb_luminance=dpixel_rgb_luminance,
+        dominant_color=dcolor,
+        dominant_color_rgb_color_difference=dcolor_rgb_color_difference,
+        dominant_color_rgb_luminance=dcolor_rgb_luminance,
+        area_intensity=area_intensity,
+        area_intensity_rgb_color_difference=area_intensity_rgb_color_difference,
+        area_intensity_rgb_luminance=area_intensity_rgb_luminance)
