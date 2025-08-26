@@ -121,6 +121,7 @@ Future Directions:
 
 
 1. create common report dataclass and html viewer.
+2. reorganize the code base structure so it's easier for analysis.
 4. demarcate new vs prior analysis.
 5. Download source code and put here for reference for .js
 """
