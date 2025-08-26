@@ -30,6 +30,24 @@ class SampleGPU:
     pixel_coords: torch.Tensor  # Pixel coordinates [u, v]
     energy: torch.Tensor  # Total luminance energy (∑ luminance * Δω)
 
+@dataclass
+class NaiveMetricsGPU:
+    """A report for the lighting analysis."""
+    global_color: torch.Tensor # Global Color (rgb)
+    global_intensity: torch.Tensor # Global Intensity (1)
+
+@dataclass
+class NaiveMetricsCPU:
+    """A report for the lighting analysis with CPU/serializable data."""
+    global_color: List[float] # Global Color (rgb) as list
+    global_intensity: float # Global Intensity as float
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            'global_color': self.global_color,
+            'global_intensity': self.global_intensity
+        }
 
 @dataclass
 class SPHMetrics:
