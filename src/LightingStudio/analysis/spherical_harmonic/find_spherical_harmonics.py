@@ -1,6 +1,7 @@
 import argparse
 from ..io import read_exrs, write_exr
 from .sph import project_env_to_coefficients, reconstruct_sph_coeffs_to_env
+from .sph_metrics import get_sph_metrics, get_sph_metrics_cpu, visualize_sph_metrics
 import torch
 from coolname import generate_slug
 from pathlib import Path
@@ -66,6 +67,27 @@ if __name__ == "__main__":
         logger.info(f"Sph coeffs shape: {sph_coeffs.shape}")
         logger.info(f"Sph basis shape: {sph_basis.shape}")
 
+        # Time SPH metrics computation
+        start_time = time.time()
+        logger.info("Computing SPH metrics...")
+        sph_metrics_cpu = get_sph_metrics_cpu(hdri, l_max=args.l_max)
+        metrics_time = time.time() - start_time
+        logger.info(f"SPH metrics computation complete in {metrics_time:.2f} seconds.")
+        
+        # Log SPH metrics information
+        logger.info("SPH Metrics Summary:")
+        logger.info(f"  Dominant direction: {sph_metrics_cpu.dominant_direction}")
+        logger.info(f"  Dominant pixel: {sph_metrics_cpu.dominant_pixel}")
+        logger.info(f"  Dominant color: {sph_metrics_cpu.dominant_color}")
+        logger.info(f"  Area intensity: {sph_metrics_cpu.area_intensity}")
+
+        # Time visualization creation
+        start_time = time.time()
+        logger.info("Creating SPH metrics visualization...")
+        vis_hdri = visualize_sph_metrics(hdri, sph_metrics_cpu)
+        visualization_time = time.time() - start_time
+        logger.info(f"Visualization creation complete in {visualization_time:.2f} seconds.")
+
         # Time reconstruction process
         start_time = time.time()
         logger.info("Reconstructing environment map from spherical harmonics...")
@@ -75,16 +97,28 @@ if __name__ == "__main__":
 
         # Time output writing
         start_time = time.time()
+        
+        # Write SPH metrics visualization
+        logger.info("Writing SPH metrics visualization...")
+        write_exr(vis_hdri, output_dir / f"{hdri_path.stem}_sph_metrics_visualization.exr")
+        
+        # Write reconstructed environment maps
         for l in range(args.l_max + 1):
             logger.info(f"Writing reconstructed environment map for band {l}...")
             write_exr(reconstructed_hdris[l, ...], output_dir / f"{hdri_path.stem}_reconstructed_{l}.exr")
         output_time = time.time() - start_time
         logger.info(f"Output writing complete in {output_time:.2f} seconds.")
+
+        # Save SPH metrics - convert to dict for JSON serialization
+        with open(output_dir / f"{hdri_path.stem}.json", "w") as f:
+            json.dump(sph_metrics_cpu.to_dict(), f, indent=2)
         
         # Log timing summary
-        total_time = projection_time + reconstruction_time + output_time
+        total_time = projection_time + metrics_time + visualization_time + reconstruction_time + output_time
         logger.info(f"Timing Summary for {hdri_path.stem}:")
         logger.info(f"  Spherical harmonics projection: {projection_time:.2f}s")
+        logger.info(f"  SPH metrics computation:        {metrics_time:.2f}s")
+        logger.info(f"  Visualization creation:         {visualization_time:.2f}s")
         logger.info(f"  Reconstruction:                 {reconstruction_time:.2f}s")
         logger.info(f"  Output writing:                 {output_time:.2f}s")
         logger.info(f"  Total analysis time:            {total_time:.2f}s")

@@ -1,9 +1,10 @@
 import torch
 from einops import rearrange, repeat
+from typing import Union
 
 from src.LightingStudio.analysis.spherical_harmonic.sph import project_env_to_coefficients, project_direction_into_coefficients, sph_l_max_from_indices_total, l_from_index, sph_indices_total
 from src.LightingStudio.analysis.utils import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map
-from src.LightingStudio.analysis.datatypes import SPHMetrics
+from src.LightingStudio.analysis.datatypes import SPHMetrics, SPHMetricsCPU
 from src.LightingStudio.analysis.utils import cartesian_to_pixel
 
 def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -32,28 +33,29 @@ def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, tor
 
     # Use [7] Section 3.3 NOT [2] page 4
     # The reason there is a negative sign in the 1st index is the difference in artist and science definition of env_map direction.
-    red_band_aligned_xyz = torch.tensor([-red_band_1[2],-red_band_1[0],red_band_1[1]])
-    green_band_aligned_xyz = torch.tensor([-green_band_1[2],-green_band_1[0],green_band_1[1]])
-    blue_band_aligned_xyz = torch.tensor([-blue_band_1[2],-blue_band_1[0],blue_band_1[1]])
+    red_band_aligned_xyz = torch.tensor([-red_band_1[2], -red_band_1[0], red_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
+    red_band_aligned_xyz = red_band_aligned_xyz / torch.linalg.norm(red_band_aligned_xyz)
+
+    green_band_aligned_xyz = torch.tensor([-green_band_1[2], -green_band_1[0], green_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
+    green_band_aligned_xyz = green_band_aligned_xyz / torch.linalg.norm(green_band_aligned_xyz)
+
+    blue_band_aligned_xyz = torch.tensor([-blue_band_1[2], -blue_band_1[0], blue_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
+    blue_band_aligned_xyz = blue_band_aligned_xyz / torch.linalg.norm(blue_band_aligned_xyz)
+
+    color_xyz = torch.stack([red_band_aligned_xyz, green_band_aligned_xyz, blue_band_aligned_xyz], dim=1)
 
     # Dominant Direction in xyz coordinate
-    dominant_direction = red_band_aligned_xyz + blue_band_aligned_xyz + green_band_aligned_xyz
+    dominant_direction = torch.sum(color_xyz, dim=1)
     dominant_direction_normalized = dominant_direction/torch.linalg.norm(dominant_direction)
 
     # Dominant Direction in rgb coordinate color_difference 
-    red_constant = 0.3
-    green_constant = 0.59
-    blue_constant = 0.11
-
-    dominant_direction_rgb_color_difference = torch.tensor([red_constant, green_constant, blue_constant]) * dominant_direction
+    rgb_color_difference_constants = torch.tensor([0.3, 0.59, 0.11], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
+    dominant_direction_rgb_color_difference = torch.sum(rgb_color_difference_constants * color_xyz, dim=1)
     dominant_direction_rgb_color_difference_normalized = dominant_direction_rgb_color_difference/torch.linalg.norm(dominant_direction_rgb_color_difference)
 
     # Dominant Direction in rgb coordinate luminance
-    red_constant = 0.2126
-    green_constant = 0.7152
-    blue_constant = 0.0722
-
-    dominant_direction_rgb_luminance = torch.tensor([red_constant, green_constant, blue_constant]) * dominant_direction
+    rgb_luminance_constants = torch.tensor([0.2126, 0.7152, 0.0722], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
+    dominant_direction_rgb_luminance = torch.sum(rgb_luminance_constants * color_xyz, dim=1)
     dominant_direction_rgb_luminance_normalized = dominant_direction_rgb_luminance/torch.linalg.norm(dominant_direction_rgb_luminance)
 
     return (dominant_direction_normalized, 
@@ -90,9 +92,9 @@ def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: tor
     # direction_sph_coeffs *= (16*np.pi)/17
     denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
 
-    color = torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
-                      torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
-                      torch.dot(sph_coeffs_b, direction_sph_coeffs) / denominator])
+    color = 255.0 * torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
+                                  torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
+                                  torch.dot(sph_coeffs_b, direction_sph_coeffs) / denominator], device=env_map_sph_coeffs.device, dtype=env_map_sph_coeffs.dtype)
     
     color = torch.clamp(color, 0, 255)
     return color
@@ -111,7 +113,7 @@ def get_cos_lobe_as_env_map(H:int, W:int, device: torch.device = None) -> torch.
     theta = spherical_coordinates[..., 0]                           # (H, W)
     theta = convert_theta(theta)                                    # (H, W)
 
-    cos_lobe = torch.maximum(0, torch.cos(theta))  # (H, W)
+    cos_lobe = torch.maximum(torch.zeros_like(theta), torch.cos(theta))  # (H, W)
     env_map_of_cos_lobe = repeat(cos_lobe, "h w -> h w c", c=3) # (H, W, 3)
 
     return env_map_of_cos_lobe
@@ -134,7 +136,7 @@ def get_area_normalization_term(env_map_sph_coeffs : torch.Tensor, cos_lobe_sph_
 
     Source:
     [8] Extracting dominant light intensity section
-    [6] RenderDiffuseIrradiance function.
+    [6] RenderDiffuseIrradiance function. cosine_lobe variable.
     [7] Equation 6.
     """
 
@@ -143,14 +145,12 @@ def get_area_normalization_term(env_map_sph_coeffs : torch.Tensor, cos_lobe_sph_
     direction_sph_coeffs = project_direction_into_coefficients(dominant_direction, l_max) # (1, n_terms)
     direction_sph_coeffs = rearrange(direction_sph_coeffs, "1 n_terms -> n_terms") # (n_terms)
 
-    # TODO check that here cos_lobe_sph_coeffs should be the same for each l band. pass!
-
-    # TODO something needs to be repeated here!!!! after discussion with Jiahao
+    # TODO: test if cos lobe coeffs is correct.
 
     scaled_direction_sph_coeffs = torch.zeros_like(direction_sph_coeffs)
     for i in range(sph_indices_total(l_max)):
         l = l_from_index(i)  # noqa: E741
-        scale_factor = torch.sqrt(4*torch.pi/ (2 * l + 1))
+        scale_factor = torch.sqrt(torch.tensor(4*torch.pi/ (2 * l + 1), device=env_map_sph_coeffs.device, dtype=env_map_sph_coeffs.dtype))
         scaled_direction_sph_coeffs[i] = scale_factor * direction_sph_coeffs[i]
 
     scaled_repeated_direction_sph_coeffs = repeat(scaled_direction_sph_coeffs, "n_terms -> n_terms c", c=3)
@@ -210,7 +210,7 @@ def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
     dd, dd_rgb_color_difference, dd_rgb_luminance = get_dominant_direction(env_map_sph_coeffs)
 
     # Get Dominant Pixel
-    dpixel, dpixel_rgb_color_difference, dpixel_rgb_luminance =  cartesian_to_pixel(torch.stack([dd, dd_rgb_color_difference, dd_rgb_luminance], dim=-1), H, W)
+    dpixel, dpixel_rgb_color_difference, dpixel_rgb_luminance =  cartesian_to_pixel(torch.stack([dd, dd_rgb_color_difference, dd_rgb_luminance], dim=0), H, W)
 
     # Get Dominant Color
     dcolor = get_dominant_color(dd, env_map_sph_coeffs)
@@ -239,3 +239,145 @@ def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
         area_intensity=area_intensity,
         area_intensity_rgb_color_difference=area_intensity_rgb_color_difference,
         area_intensity_rgb_luminance=area_intensity_rgb_luminance)
+
+
+def get_sph_metrics_cpu(env_map: torch.Tensor, l_max: int) -> SPHMetricsCPU:
+    # Get GPU metrics first
+    metrics = get_sph_metrics(env_map, l_max)
+    
+    # Convert all tensors to CPU and then to lists/floats
+    cpu_metrics = SPHMetricsCPU(
+        sph_coeffs=metrics.sph_coeffs.cpu().numpy().tolist(),
+        dominant_direction=metrics.dominant_direction.cpu().numpy().tolist(),
+        dominant_direction_rgb_color_difference=metrics.dominant_direction_rgb_color_difference.cpu().numpy().tolist(),
+        dominant_direction_rgb_luminance=metrics.dominant_direction_rgb_luminance.cpu().numpy().tolist(),
+        dominant_pixel=metrics.dominant_pixel.cpu().numpy().tolist(),
+        dominant_pixel_rgb_color_difference=metrics.dominant_pixel_rgb_color_difference.cpu().numpy().tolist(),
+        dominant_pixel_rgb_luminance=metrics.dominant_pixel_rgb_luminance.cpu().numpy().tolist(),
+        dominant_color=metrics.dominant_color.cpu().numpy().tolist(),
+        dominant_color_rgb_color_difference=metrics.dominant_color_rgb_color_difference.cpu().numpy().tolist(),
+        dominant_color_rgb_luminance=metrics.dominant_color_rgb_luminance.cpu().numpy().tolist(),
+        area_intensity=metrics.area_intensity.cpu().numpy().tolist(),
+        area_intensity_rgb_color_difference=metrics.area_intensity_rgb_color_difference.cpu().numpy().tolist(),
+        area_intensity_rgb_luminance=metrics.area_intensity_rgb_luminance.cpu().numpy().tolist()
+    )
+    
+    return cpu_metrics
+
+
+def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPHMetricsCPU]) -> torch.Tensor:
+    """
+    Visualize the SPH metrics on the HDRI with colored circles around dominant pixels and a legend.
+    
+    Args:
+        hdri: Input HDRI tensor (H, W, 3)
+        sph_metrics: SPHMetrics or SPHMetricsCPU object containing dominant pixel information
+    
+    Returns:
+        Visualization tensor with colored circles around dominant pixels and a legend
+    """
+    H, W, _ = hdri.shape
+    vis_hdri = hdri.clone()
+    
+    # Define colors for the three dominant pixels
+    red_color = torch.tensor([1.0, 0.0, 0.0], device=hdri.device, dtype=hdri.dtype)
+    green_color = torch.tensor([0.0, 1.0, 0.0], device=hdri.device, dtype=hdri.dtype)  
+    blue_color = torch.tensor([0.0, 0.0, 1.0], device=hdri.device, dtype=hdri.dtype)
+    white_color = torch.tensor([1.0, 1.0, 1.0], device=hdri.device, dtype=hdri.dtype)
+    
+    # Get dominant pixel coordinates
+    dominant_pixels = [
+        (sph_metrics.dominant_pixel, red_color, "Dominant Pixel"),
+        (sph_metrics.dominant_pixel_rgb_color_difference, green_color, "RGB Color Difference"),
+        (sph_metrics.dominant_pixel_rgb_luminance, blue_color, "RGB Luminance")
+    ]
+    
+    # Draw circles around each dominant pixel
+    for pixel_coords, color, label in dominant_pixels:
+        # Handle different pixel_coords types (tensor vs list)
+        if isinstance(pixel_coords, torch.Tensor):
+            pixel_x = max(0, min(W-1, int(pixel_coords[0].item())))
+            pixel_y = max(0, min(H-1, int(pixel_coords[1].item())))
+        else:
+            # pixel_coords is a list (SPHMetricsCPU)
+            pixel_x = max(0, min(W-1, int(pixel_coords[0])))
+            pixel_y = max(0, min(H-1, int(pixel_coords[1])))
+        
+        # Draw colored circle (border) around the dominant pixel
+        center_y, center_x = pixel_y, pixel_x
+        
+        # Store the original center pixel color
+        original_center_color = vis_hdri[center_y, center_x, :].clone()
+        
+        # Draw circle with radius 3 (just the border)
+        for dy in range(-3, 4):
+            for dx in range(-3, 4):
+                y_coord = center_y + dy
+                x_coord = center_x + dx
+                
+                # Check bounds
+                if 0 <= y_coord < H and 0 <= x_coord < W:
+                    # Calculate distance from center
+                    dist_sq = dy*dy + dx*dx
+                    
+                    # Draw circle border (distance 2.5 to 3.5)
+                    if 6 <= dist_sq <= 12:  # Approximate circle border
+                        vis_hdri[y_coord, x_coord, :] = color
+        
+        # Restore the center pixel with original color
+        vis_hdri[center_y, center_x, :] = original_center_color
+    
+    # Create legend in the top-left corner
+    legend_height = 60
+    legend_width = 200
+    legend_x_start = 10
+    legend_y_start = 10
+    
+    # Ensure legend doesn't go out of bounds
+    legend_x_end = min(W, legend_x_start + legend_width)
+    legend_y_end = min(H, legend_y_start + legend_height)
+    
+    # Create semi-transparent white background for legend
+    legend_alpha = 0.7
+    for y in range(legend_y_start, legend_y_end):
+        for x in range(legend_x_start, legend_x_end):
+            if 0 <= y < H and 0 <= x < W:
+                vis_hdri[y, x, :] = legend_alpha * white_color + (1 - legend_alpha) * vis_hdri[y, x, :]
+    
+    # Draw legend items (colored circles and text-like patterns)
+    legend_items = [
+        (red_color, "Dominant Pixel", 0),
+        (green_color, "RGB Color Diff", 15),
+        (blue_color, "RGB Luminance", 30)
+    ]
+    
+    for color, label, y_offset in legend_items:
+        legend_y = legend_y_start + 10 + y_offset
+        legend_x = legend_x_start + 10
+        
+        # Draw small colored circle as legend marker
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                y_coord = legend_y + dy
+                x_coord = legend_x + dx
+                
+                if 0 <= y_coord < H and 0 <= x_coord < W:
+                    dist_sq = dy*dy + dx*dx
+                    if dist_sq <= 4:  # Small filled circle
+                        vis_hdri[y_coord, x_coord, :] = color
+        
+        # Create simple text representation using colored pixels
+        # This is a simplified version - in practice you might want to use actual text rendering
+        text_start_x = legend_x + 15
+        text_y = legend_y
+        
+        # Draw a simple line pattern to represent text
+        for i in range(min(50, legend_x_end - text_start_x)):
+            x_coord = text_start_x + i
+            if 0 <= text_y < H and 0 <= x_coord < W:
+                # Create a simple pattern to represent text
+                if i % 8 < 6:  # Simple text-like pattern
+                    vis_hdri[text_y, x_coord, :] = color * 0.8
+    
+    return vis_hdri
+

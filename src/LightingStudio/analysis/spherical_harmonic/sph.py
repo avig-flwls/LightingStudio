@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import math
 from einops import einsum
-from ..utils import generate_spherical_coordinates_map, spherical_to_cartesian, pixel_solid_angles, convert_theta
+from ..utils import generate_spherical_coordinates_map, spherical_to_cartesian, pixel_solid_angles, convert_theta, cartesian_to_spherical
 
 
 # -----------------------------
@@ -718,6 +718,34 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
     ], dim=1) # (n_terms, 3)
 
     return sph_coeffs, sph_basis
+
+def project_direction_into_coefficients(direction: torch.Tensor, l_max:int) -> torch.Tensor:
+    """
+    Project a single direction into the SPH coefficients.
+
+    We assume that the function value of L(theta, phi) = 1 at direction.
+    Thus the sph_coefficients value just the value of Y(theta, phi) evaluated at that direction.
+    
+    Mathematically:
+        Y_lm = integral integral delta L() Y() d_theta d_phi
+
+    : params direction: direction of light source (..., 3)
+    : params l_max: the number of bands
+
+    :returns sph_coeffs: (..., n_terms)
+
+    Source:
+    [4] Equation 10.
+    """
+
+    assert(direction.shape[-1] == 3), f'direction can only be in cartesian coordinates so it must be of length 3, but we are getting {direction.shape}'
+
+
+    if l_max <= 4:
+        return cartesian_to_sph_basis_vectorized(direction, l_max)
+    else:
+        direction_as_spherical = cartesian_to_spherical(direction)
+        return spherical_to_sph_basis_vectorized(direction_as_spherical, l_max)
 
 
 def reconstruct_sph_coeffs_to_env(H:int, W:int, sph_coeffs: torch.Tensor, sph_basis:torch.Tensor) -> torch.Tensor:
