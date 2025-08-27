@@ -658,12 +658,14 @@ def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: tor
     # TODO: maybe we need to normalize the light??
     # direction_sph_coeffs *= (16*np.pi)/17
     denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
-    # denominator = 1
 
     color = torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
                                   torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
                                   torch.dot(sph_coeffs_b, direction_sph_coeffs) / denominator], device=env_map_sph_coeffs.device, dtype=env_map_sph_coeffs.dtype)
     
+    # Normalize color to 0-255
+    # TODO: this doesn't match with the blog post, kinda a hack.
+    color = 255.0 * (color / torch.linalg.norm(color))
     color = torch.clamp(color, 0, 255)
     return color
 
