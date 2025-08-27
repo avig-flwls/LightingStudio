@@ -657,9 +657,10 @@ def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: tor
 
     # TODO: maybe we need to normalize the light??
     # direction_sph_coeffs *= (16*np.pi)/17
-    denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
+    # denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
+    denominator = 1
 
-    color = 255.0 * torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
+    color = torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
                                   torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
                                   torch.dot(sph_coeffs_b, direction_sph_coeffs) / denominator], device=env_map_sph_coeffs.device, dtype=env_map_sph_coeffs.dtype)
     
@@ -834,32 +835,34 @@ def get_sph_metrics_cpu(env_map: torch.Tensor, l_max: int) -> SPHMetricsCPU:
 
 def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPHMetricsCPU]) -> torch.Tensor:
     """
-    Visualize the SPH metrics on the HDRI with colored circles around dominant pixels and a legend.
+    Visualize the SPH metrics with colored circles at dominant pixel locations and a legend on a dark gray background.
     
     Args:
-        hdri: Input HDRI tensor (H, W, 3)
+        hdri: Input HDRI tensor (H, W, 3) - used for dimensions and device info
         sph_metrics: SPHMetrics or SPHMetricsCPU object containing dominant pixel information
     
     Returns:
-        Visualization tensor with colored circles around dominant pixels and a legend
+        Visualization tensor with colored circles at dominant pixels and legend on a dark gray background
     """
     H, W, _ = hdri.shape
-    vis_hdri = hdri.clone()
+    
+    # Create light gray background (easier to see colored elements)
+    background_color = torch.tensor([0.2, 0.2, 0.2], device=hdri.device, dtype=hdri.dtype)
+    vis_hdri = background_color.expand(H, W, 3).clone()
     
     # Define colors for the three dominant pixels
     red_color = torch.tensor([1.0, 0.0, 0.0], device=hdri.device, dtype=hdri.dtype)
     green_color = torch.tensor([0.0, 1.0, 0.0], device=hdri.device, dtype=hdri.dtype)  
     blue_color = torch.tensor([0.0, 0.0, 1.0], device=hdri.device, dtype=hdri.dtype)
-    white_color = torch.tensor([1.0, 1.0, 1.0], device=hdri.device, dtype=hdri.dtype)
     
-    # Get dominant pixel coordinates
+    # Get dominant pixel coordinates and draw circles around them
     dominant_pixels = [
         (sph_metrics.dominant_pixel, red_color, "Dominant Pixel"),
         (sph_metrics.dominant_pixel_rgb_color_difference, green_color, "RGB Color Difference"),
         (sph_metrics.dominant_pixel_rgb_luminance, blue_color, "RGB Luminance")
     ]
     
-    # Draw circles around each dominant pixel
+    # Draw filled circles at each dominant pixel location
     for pixel_coords, color, label in dominant_pixels:
         # Handle different pixel_coords types (tensor vs list)
         if isinstance(pixel_coords, torch.Tensor):
@@ -870,15 +873,12 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
             pixel_x = max(0, min(W-1, int(pixel_coords[0])))
             pixel_y = max(0, min(H-1, int(pixel_coords[1])))
         
-        # Draw colored circle (border) around the dominant pixel
+        # Draw filled colored circle at the dominant pixel location
         center_y, center_x = pixel_y, pixel_x
+        circle_radius = 8  # Larger circle for visibility
         
-        # Store the original center pixel color
-        original_center_color = vis_hdri[center_y, center_x, :].clone()
-        
-        # Draw circle with radius 3 (just the border)
-        for dy in range(-3, 4):
-            for dx in range(-3, 4):
+        for dy in range(-circle_radius, circle_radius + 1):
+            for dx in range(-circle_radius, circle_radius + 1):
                 y_coord = center_y + dy
                 x_coord = center_x + dx
                 
@@ -887,12 +887,9 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
                     # Calculate distance from center
                     dist_sq = dy*dy + dx*dx
                     
-                    # Draw circle border (distance 2.5 to 3.5)
-                    if 6 <= dist_sq <= 12:  # Approximate circle border
+                    # Draw filled circle
+                    if dist_sq <= circle_radius * circle_radius:
                         vis_hdri[y_coord, x_coord, :] = color
-        
-        # Restore the center pixel with original color
-        vis_hdri[center_y, center_x, :] = original_center_color
     
     # Create legend in the top-left corner
     legend_height = 60
@@ -903,13 +900,6 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
     # Ensure legend doesn't go out of bounds
     legend_x_end = min(W, legend_x_start + legend_width)
     legend_y_end = min(H, legend_y_start + legend_height)
-    
-    # Create semi-transparent white background for legend
-    legend_alpha = 0.7
-    for y in range(legend_y_start, legend_y_end):
-        for x in range(legend_x_start, legend_x_end):
-            if 0 <= y < H and 0 <= x < W:
-                vis_hdri[y, x, :] = legend_alpha * white_color + (1 - legend_alpha) * vis_hdri[y, x, :]
     
     # Draw legend items (colored circles and text-like patterns)
     legend_items = [
@@ -922,15 +912,16 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
         legend_y = legend_y_start + 10 + y_offset
         legend_x = legend_x_start + 10
         
-        # Draw small colored circle as legend marker
-        for dy in range(-2, 3):
-            for dx in range(-2, 3):
+        # Draw larger filled colored circle as legend marker
+        circle_radius = 5
+        for dy in range(-circle_radius, circle_radius + 1):
+            for dx in range(-circle_radius, circle_radius + 1):
                 y_coord = legend_y + dy
                 x_coord = legend_x + dx
                 
                 if 0 <= y_coord < H and 0 <= x_coord < W:
                     dist_sq = dy*dy + dx*dx
-                    if dist_sq <= 4:  # Small filled circle
+                    if dist_sq <= circle_radius * circle_radius:  # Filled circle
                         vis_hdri[y_coord, x_coord, :] = color
         
         # Create simple text representation using colored pixels

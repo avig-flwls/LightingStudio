@@ -1,15 +1,34 @@
-from src.LightingStudio.analysis.utils.io import read_exrs, write_exr
 import argparse
-from src.LightingStudio.analysis.core.median_cut import median_cut_sampling, median_cut_sampling_to_cpu, visualize_samples
-from src.LightingStudio.analysis.core.density_estimation import expand_map_exact, expand_map_fast
-from src.LightingStudio.analysis.core.intensity_calculation import naive_metrics, naive_metrics_cpu
-from src.LightingStudio.analysis.core.sph import get_sph_metrics, get_sph_metrics_cpu, project_env_to_coefficients, reconstruct_sph_coeffs_to_env, visualize_sph_metrics
+import json
+import logging
+import time
+from pathlib import Path
+
 import torch
 from coolname import generate_slug
-from pathlib import Path
-import json
-import time
-import logging
+
+from src.LightingStudio.analysis.utils.io import read_exrs, write_exr
+from src.LightingStudio.analysis.core.median_cut import (
+    median_cut_sampling,
+    median_cut_sampling_to_cpu,
+    visualize_samples,
+)
+from src.LightingStudio.analysis.core.density_estimation import (
+    expand_map_exact,
+    expand_map_fast,
+)
+from src.LightingStudio.analysis.core.intensity_calculation import (
+    naive_metrics,
+    naive_metrics_cpu,
+)
+from src.LightingStudio.analysis.core.sph import (
+    get_sph_metrics,
+    get_sph_metrics_cpu,
+    project_env_to_coefficients,
+    reconstruct_sph_coeffs_to_env,
+    visualize_sph_metrics,
+)
+from src.LightingStudio.analysis.report.html_report import generate_html_report
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
@@ -55,6 +74,9 @@ if __name__ == "__main__":
     
     hdris = read_exrs(args.hdri).to(device)
     logger.info(f"Loaded {len(hdris)} HDRI files")
+    
+    # Create list of HDRI names for navigation
+    hdri_names = [Path(hdri_path).stem for hdri_path in args.hdri]
 
     for hdri_path, hdri in zip(args.hdri, hdris):
         hdri_path = Path(hdri_path)
@@ -169,6 +191,13 @@ if __name__ == "__main__":
         logger.info(f"  Spherical harmonic metrics: {sph_metrics_time:.2f}s")
         logger.info(f"  Total analysis time: {total_time:.2f}s")
         logger.info("-" * 50)
+
+        # ------------------------------------------------------------
+        # Generate HTML Report
+        # ------------------------------------------------------------
+        
+        html_path = generate_html_report(hdri_output_dir, hdri_path.stem, hdri_names)
+        logger.info(f"HTML report generated: {html_path}")
 
 
  
