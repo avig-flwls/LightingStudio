@@ -1,3 +1,4 @@
+import cv2  
 import torch
 import math
 from src.LightingStudio.analysis.utils.transforms import generate_spherical_coordinates_map, spherical_to_cartesian, pixel_solid_angles, convert_theta, cartesian_to_spherical, cartesian_to_pixel
@@ -867,8 +868,8 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
     # Get dominant pixel coordinates and draw circles around them
     dominant_pixels = [
         (sph_metrics.dominant_pixel, red_color, "Dominant Pixel"),
-        (sph_metrics.dominant_pixel_rgb_color_difference, green_color, "RGB Color Difference"),
-        (sph_metrics.dominant_pixel_rgb_luminance, blue_color, "RGB Luminance")
+        (sph_metrics.dominant_pixel_rgb_color_difference, green_color, "Dominant Pixel RGB Color Difference"),
+        (sph_metrics.dominant_pixel_rgb_luminance, blue_color, "Dominant Pixel RGB Luminance")
     ]
     
     # Draw filled circles at each dominant pixel location
@@ -900,51 +901,41 @@ def visualize_sph_metrics(hdri: torch.Tensor, sph_metrics: Union[SPHMetrics, SPH
                     if dist_sq <= circle_radius * circle_radius:
                         vis_hdri[y_coord, x_coord, :] = color
     
-    # Create legend in the top-left corner
-    legend_height = 60
-    legend_width = 200
-    legend_x_start = 10
-    legend_y_start = 10
+    # Convert to numpy for OpenCV text rendering
+    vis_image = (vis_hdri.cpu().numpy() * 255).astype('uint8')
     
-    # Ensure legend doesn't go out of bounds
-    legend_x_end = min(W, legend_x_start + legend_width)
-    legend_y_end = min(H, legend_y_start + legend_height)
-    
-    # Draw legend items (colored circles and text-like patterns)
+    # Create legend with proper text labels using OpenCV
     legend_items = [
         (red_color, "Dominant Pixel", 0),
-        (green_color, "RGB Color Diff", 15),
-        (blue_color, "RGB Luminance", 30)
+        (green_color, "Dominant Pixel RGB Color Difference", 20),
+        (blue_color, "Dominant Pixel RGB Luminance", 40)
     ]
     
+    # Legend styling
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.6
+    font_thickness = 2
+    text_color_white = (255, 255, 255)  # White text for readability on dark background
+    legend_x_start = 10
+    legend_y_start = 30
+    
     for color, label, y_offset in legend_items:
-        legend_y = legend_y_start + 10 + y_offset
+        legend_y = legend_y_start + y_offset
         legend_x = legend_x_start + 10
         
-        # Draw larger filled colored circle as legend marker
-        circle_radius = 5
-        for dy in range(-circle_radius, circle_radius + 1):
-            for dx in range(-circle_radius, circle_radius + 1):
-                y_coord = legend_y + dy
-                x_coord = legend_x + dx
-                
-                if 0 <= y_coord < H and 0 <= x_coord < W:
-                    dist_sq = dy*dy + dx*dx
-                    if dist_sq <= circle_radius * circle_radius:  # Filled circle
-                        vis_hdri[y_coord, x_coord, :] = color
+        # Convert color to BGR for OpenCV (0-255 range)
+        color_bgr = tuple(int(c * 255) for c in color.cpu().numpy()[::-1])  # RGB to BGR
         
-        # Create simple text representation using colored pixels
-        # This is a simplified version - in practice you might want to use actual text rendering
-        text_start_x = legend_x + 15
+        # Draw filled colored circle as legend marker
+        cv2.circle(vis_image, (legend_x, legend_y - 5), 8, color_bgr, -1)
+        
+        # Add text label next to the circle
+        text_x = legend_x + 25
         text_y = legend_y
-        
-        # Draw a simple line pattern to represent text
-        for i in range(min(50, legend_x_end - text_start_x)):
-            x_coord = text_start_x + i
-            if 0 <= text_y < H and 0 <= x_coord < W:
-                # Create a simple pattern to represent text
-                if i % 8 < 6:  # Simple text-like pattern
-                    vis_hdri[text_y, x_coord, :] = color * 0.8
+        cv2.putText(vis_image, label, (text_x, text_y), font, font_scale, text_color_white, font_thickness)
+    
+    # Convert back to torch tensor with same device and dtype as input
+    vis_hdri = torch.from_numpy(vis_image.astype('float32') / 255.0).to(device=hdri.device, dtype=hdri.dtype)
     
     return vis_hdri
 

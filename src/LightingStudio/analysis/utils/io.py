@@ -8,6 +8,36 @@ import numpy as np
 from pathlib import Path
 
 
+def find_hdri_files(directory: str) -> list[str]:
+    """
+    Find all HDRI files in a directory.
+    
+    :param directory: Path to directory to scan
+    :return: List of HDRI file paths
+    """
+    directory_path = Path(directory)
+    if not directory_path.exists():
+        raise ValueError(f"Directory does not exist: {directory}")
+    if not directory_path.is_dir():
+        raise ValueError(f"Path is not a directory: {directory}")
+    
+    # Common HDRI file extensions
+    hdri_extensions = {'.exr', '.hdr', '.hdri', '.pic', '.rgbe'}
+    
+    hdri_files = []
+    for file_path in directory_path.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() in hdri_extensions:
+            hdri_files.append(str(file_path))
+    
+    # Sort files for consistent ordering
+    hdri_files.sort()
+    
+    if not hdri_files:
+        raise ValueError(f"No HDRI files found in directory: {directory}")
+    
+    return hdri_files
+
+
 def read_exrs(exr_paths: list[str]) -> torch.Tensor:
     """
     Read in list of exr files as rgb.

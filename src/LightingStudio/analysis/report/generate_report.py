@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from coolname import generate_slug
 
-from src.LightingStudio.analysis.utils.io import read_exrs, write_exr
+from src.LightingStudio.analysis.utils.io import read_exrs, write_exr, find_hdri_files
 from src.LightingStudio.analysis.core.median_cut import (
     median_cut_sampling,
     median_cut_sampling_to_cpu,
@@ -32,8 +32,16 @@ from src.LightingStudio.analysis.report.html_report import generate_html_report
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
+# Usage examples:
+# 
+# Process a single HDRI file:
 # python -m src.LightingStudio.analysis.report.generate_report --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" --n_samples 1024 --l_max 3
+#
+# Process multiple HDRI files:
 # python -m src.LightingStudio.analysis.report.generate_report --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Games Room 02.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Factory Canteen 02.exr" --n_samples 1024 --l_max 3
+#
+# Process all HDRI files in a folder:
+# python -m src.LightingStudio.analysis.report.generate_report --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k" --n_samples 1024 --l_max 3
 
 
 if __name__ == "__main__":
@@ -47,7 +55,12 @@ if __name__ == "__main__":
     )
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hdri", type=str, nargs='+', required=True, help="List of HDRI file paths")
+    
+    # Create mutually exclusive group for input options
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--hdri", type=str, nargs='+', help="List of HDRI file paths")
+    input_group.add_argument("--folder", type=str, help="Folder containing HDRI files")
+    
     parser.add_argument("--n_samples", type=int, required=True, help="Number of samples (must be > 1024)")
     parser.add_argument("--l_max", type=int, required=True, help="Maximum spherical harmonic band")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose (DEBUG) logging")
@@ -61,6 +74,24 @@ if __name__ == "__main__":
     if args.n_samples < 1024:
         parser.error("The value of --n_samples must be greater than 1024.")
 
+    # Determine HDRI file paths based on input type
+    if args.hdri:
+        hdri_paths = args.hdri
+        print(f"Processing {len(hdri_paths)} HDRI files from command line arguments")
+    elif args.folder:
+        try:
+            hdri_paths = find_hdri_files(args.folder)
+            print(f"Found {len(hdri_paths)} HDRI files in folder: {args.folder}")
+        except ValueError as e:
+            parser.error(str(e))
+    else:
+        parser.error("Either --hdri or --folder must be specified")
+
+    # Validate that all files exist
+    for hdri_path in hdri_paths:
+        if not Path(hdri_path).exists():
+            parser.error(f"HDRI file does not exist: {hdri_path}")
+
     experiment_name = generate_slug(2)
     output_dir = Path(OUTPUT_DIR) / experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,13 +103,13 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    hdris = read_exrs(args.hdri).to(device)
+    hdris = read_exrs(hdri_paths).to(device)
     logger.info(f"Loaded {len(hdris)} HDRI files")
     
     # Create list of HDRI names for navigation
-    hdri_names = [Path(hdri_path).stem for hdri_path in args.hdri]
+    hdri_names = [Path(hdri_path).stem for hdri_path in hdri_paths]
 
-    for hdri_path, hdri in zip(args.hdri, hdris):
+    for hdri_path, hdri in zip(hdri_paths, hdris):
         hdri_path = Path(hdri_path)
         print(f"Processing {hdri_path}...")
         logger.info(f"Processing {hdri_path.name} with shape {hdri.shape}")
