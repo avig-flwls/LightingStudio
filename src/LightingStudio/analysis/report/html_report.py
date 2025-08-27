@@ -28,31 +28,20 @@ def generate_html_report(
     web_dir = hdri_output_dir / "web"
     web_dir.mkdir(exist_ok=True)
     
-    # Define the EXR files we want to display
-    exr_files = {
-        "original": hdri_output_dir / f"{hdri_name}_original.exr",
-        "median_cut": hdri_output_dir / f"{hdri_name}_median_cut.exr", 
-        "density_map_exact": hdri_output_dir / f"{hdri_name}_density_map_exact.exr",
-        "sph_metrics": hdri_output_dir / f"{hdri_name}_sph_metrics.exr",
-        "reconstructed_1": hdri_output_dir / f"{hdri_name}_reconstructed_1.exr",
-        "reconstructed_2": hdri_output_dir / f"{hdri_name}_reconstructed_2.exr",
-        "reconstructed_3": hdri_output_dir / f"{hdri_name}_reconstructed_3.exr"
-    }
-    
-    # Convert EXR files to PNG for web display
+    # Define the PNG files that should already exist (created during processing)
     png_files = {}
-    for name, exr_path in exr_files.items():
-        if exr_path.exists():
-            png_path = web_dir / f"{hdri_name}_{name}.png"
-            try:
-                exr_to_png(str(exr_path), str(png_path), gamma=2.2, exposure=0.0)
-                png_files[name] = f"web/{png_path.name}"
-                print(f"Converted {exr_path.name} to {png_path.name}")
-            except Exception as e:
-                print(f"Error converting {exr_path.name}: {e}")
-                png_files[name] = None
+    png_names = [
+        "original", "median_cut", "density_map_fast", "sph_metrics",
+        "reconstructed_1", "reconstructed_2", "reconstructed_3"
+    ]
+    
+    for name in png_names:
+        png_path = web_dir / f"{hdri_name}_{name}.png"
+        if png_path.exists():
+            png_files[name] = f"web/{png_path.name}"
+            print(f"Found PNG: {png_path.name}")
         else:
-            print(f"Warning: {exr_path.name} not found")
+            print(f"Warning: {png_path.name} not found")
             png_files[name] = None
     
     # Load analysis metrics if available
@@ -71,7 +60,7 @@ def generate_html_report(
             metrics['sph'] = json.load(f)
     
     # Generate HTML content
-    html_content = _generate_html_template(hdri_name, png_files, metrics, hdri_list)
+    html_content = _generate_html_template(hdri_name, png_files, metrics, hdri_list, hdri_output_dir)
     
     # Write HTML file
     html_path = hdri_output_dir / f"{hdri_name}_report.html"
@@ -86,7 +75,8 @@ def _generate_html_template(
     hdri_name: str, 
     png_files: Dict[str, Optional[str]], 
     metrics: Dict,
-    hdri_list: Optional[List[str]] = None
+    hdri_list: Optional[List[str]] = None,
+    hdri_output_dir: Optional[Path] = None
 ) -> str:
     """Generate the HTML template with the analysis results."""
     
@@ -115,7 +105,7 @@ def _generate_html_template(
     analysis_row = ""
     analysis_configs = [
         ("median_cut", "Median Cut Sampling", "Visualization of median cut sampling points"),
-        ("density_map_exact", "Density Map (Exact)", "Exact density estimation map"),
+        ("density_map_fast", "Density Map (Fast)", "Fast density estimation map"),
         ("sph_metrics", "Dominant Direction and Color", "Spherical harmonic derived dominant direction and color")
     ]
     
@@ -170,6 +160,10 @@ def _generate_html_template(
         prev_hdri = hdri_list[current_index - 1] if current_index > 0 else None
         next_hdri = hdri_list[current_index + 1] if current_index < len(hdri_list) - 1 else None
         
+        # Determine the experiment name for aggregate link (parent directory name)
+        experiment_name = hdri_output_dir.parent.name if hdri_output_dir else "experiment"
+        aggregate_file = f"../{experiment_name}_aggregate_statistics.html"
+        
         navigation_bar = f"""
         <div class="navigation-bar">
             <button class="nav-button" onclick="navigateToHdri('{prev_hdri}')" {'disabled' if prev_hdri is None else ''}>
@@ -178,6 +172,21 @@ def _generate_html_template(
             <span class="nav-counter">{current_index + 1} of {len(hdri_list)}</span>
             <button class="nav-button" onclick="navigateToHdri('{next_hdri}')" {'disabled' if next_hdri is None else ''}>
                 Next →
+            </button>
+            <button class="nav-button aggregate-button" onclick="window.location.href='{aggregate_file}'">
+                📊 Aggregate Statistics
+            </button>
+        </div>
+        """
+    else:
+        # Even for single HDRI, show link to aggregate if multiple HDRIs exist
+        experiment_name = hdri_output_dir.parent.name if hdri_output_dir else "experiment"
+        aggregate_file = f"../{experiment_name}_aggregate_statistics.html"
+        navigation_bar = f"""
+        <div class="navigation-bar">
+            <span class="nav-counter">Individual Report</span>
+            <button class="nav-button aggregate-button" onclick="window.location.href='{aggregate_file}'">
+                📊 Aggregate Statistics
             </button>
         </div>
         """
@@ -349,6 +358,21 @@ def _generate_html_template(
             background: #a0a0a0;
             color: #606060;
             cursor: not-allowed;
+        }}
+        
+        .aggregate-button {{
+            background: #c0c0c0 !important;
+            color: #000 !important;
+            border: 1px outset #c0c0c0 !important;
+            font-weight: bold;
+        }}
+        
+        .aggregate-button:hover {{
+            background: #e0e0e0 !important;
+        }}
+        
+        .aggregate-button:active {{
+            border: 1px inset #c0c0c0 !important;
         }}
         
         .nav-counter {{

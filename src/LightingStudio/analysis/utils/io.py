@@ -38,23 +38,68 @@ def find_hdri_files(directory: str) -> list[str]:
     return hdri_files
 
 
-def read_exrs(exr_paths: list[str]) -> torch.Tensor:
+def read_exr(exr_path: str) -> torch.Tensor:
     """
-    Read in list of exr files as rgb.
-
-    : return image: (B, H, W, 3)
+    Read a single EXR file as RGB.
+    
+    Args:
+        exr_path: Path to the EXR file
+        
+    Returns:
+        torch.Tensor: Image tensor with shape (H, W, 3)
+        
+    Raises:
+        ValueError: If the file cannot be read
     """
-    images = []
- 
-    for i, exr_path in enumerate(exr_paths):
-        image = cv2.imread(str(exr_path),  cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)  
+    try:
+        image = cv2.imread(str(exr_path), cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+        
+        if image is None:
+            raise ValueError(f"Could not read file {exr_path}")
+            
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         H, W, C = image_rgb.shape
         assert(C == 3), f'The number of channels C:{C} >3 which is not possible...'
-        images.append(torch.from_numpy(image_rgb))
+        
+        return torch.from_numpy(image_rgb)
+        
+    except Exception as e:
+        raise ValueError(f"Error reading file {exr_path}: {e}")
 
-    return torch.stack(images, dim=0)
+
+def read_exrs(exr_paths: list[str]) -> tuple[torch.Tensor, list[str]]:
+    """
+    Read in list of exr files as rgb.
+
+    : return image: (B, H, W, 3), list of successfully loaded file paths
+    """
+    images = []
+    successful_paths = []
+
+    for i, exr_path in enumerate(exr_paths):
+        try:
+            image = cv2.imread(str(exr_path),  cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+            
+            if image is None:
+                print(f"Warning: Could not read file {exr_path} - skipping")
+                continue
+                
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            H, W, C = image_rgb.shape
+            assert(C == 3), f'The number of channels C:{C} >3 which is not possible...'
+            images.append(torch.from_numpy(image_rgb))
+            successful_paths.append(exr_path)
+            
+        except Exception as e:
+            print(f"Warning: Error reading file {exr_path}: {e} - skipping")
+            continue
+
+    if not images:
+        raise ValueError("No images could be successfully loaded")
+        
+    return torch.stack(images, dim=0), successful_paths
 
 def write_exr(image: torch.Tensor, exr_path: str):
     """
