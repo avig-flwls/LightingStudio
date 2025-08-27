@@ -3,7 +3,7 @@ import argparse
 from src.LightingStudio.analysis.core.median_cut import median_cut_sampling, median_cut_sampling_to_cpu, visualize_samples
 from src.LightingStudio.analysis.core.density_estimation import expand_map_exact, expand_map_fast
 from src.LightingStudio.analysis.core.intensity_calculation import naive_metrics, naive_metrics_cpu
-from src.LightingStudio.analysis.core.sph import get_sph_metrics, get_sph_metrics_cpu, project_env_to_coefficients, reconstruct_sph_coeffs_to_env, get_cos_lobe_as_env_map
+from src.LightingStudio.analysis.core.sph import get_sph_metrics, get_sph_metrics_cpu, project_env_to_coefficients, reconstruct_sph_coeffs_to_env, visualize_sph_metrics
 import torch
 from coolname import generate_slug
 from pathlib import Path
@@ -61,6 +61,11 @@ if __name__ == "__main__":
         print(f"Processing {hdri_path}...")
         logger.info(f"Processing {hdri_path.name} with shape {hdri.shape}")
 
+        # Create subfolder for this HDRI
+        hdri_output_dir = output_dir / hdri_path.stem
+        hdri_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"HDRI output directory: {hdri_output_dir}")
+
         # ------------------------------------------------------------
         # Start Analysis
         # ------------------------------------------------------------
@@ -113,18 +118,25 @@ if __name__ == "__main__":
         # ------------------------------------------------------------
         # Save images
         # ------------------------------------------------------------
+        
+        # Save original HDRI
+        write_exr(hdri, hdri_output_dir / f"{hdri_path.stem}_original.exr")
 
         # Save density map
-        write_exr(density_map_exact, output_dir / f"{hdri_path.stem}_density_map_exact.exr")
-        write_exr(density_map_fast, output_dir / f"{hdri_path.stem}_density_map_fast.exr")
+        write_exr(density_map_exact, hdri_output_dir / f"{hdri_path.stem}_density_map_exact.exr")
+        write_exr(density_map_fast, hdri_output_dir / f"{hdri_path.stem}_density_map_fast.exr")
 
         # Save samples visualization
         vis_hdri = visualize_samples(hdri, samples_cpu)
-        write_exr(vis_hdri, output_dir / f"{hdri_path.stem}_median_cut.exr")
+        write_exr(vis_hdri, hdri_output_dir / f"{hdri_path.stem}_median_cut.exr")
 
         # Save reconstructed environment maps
         for l in range(args.l_max + 1):
-            write_exr(env_map_reconstructed[l, ...], output_dir / f"{hdri_path.stem}_reconstructed_{l}.exr")
+            write_exr(env_map_reconstructed[l, ...], hdri_output_dir / f"{hdri_path.stem}_reconstructed_{l}.exr")
+
+        # Save spherical harmonic metrics visualization
+        vis_sph_metrics = visualize_sph_metrics(hdri, sph_metrics_cpu)
+        write_exr(vis_sph_metrics, hdri_output_dir / f"{hdri_path.stem}_sph_metrics.exr")
 
         # ------------------------------------------------------------
         # Save Metrics as JSON
@@ -132,17 +144,17 @@ if __name__ == "__main__":
 
         # Save samples 
         samples_dict = [sample.to_dict() for sample in samples_cpu]
-        with open(output_dir / f"{hdri_path.stem}_samples.json", "w") as f:
+        with open(hdri_output_dir / f"{hdri_path.stem}_samples.json", "w") as f:
             json.dump(samples_dict, f, indent=2)
 
         # Save naive metrics
         naive_metrics_dict = naive_metrics_cpu(hdri).to_dict()
-        with open(output_dir / f"{hdri_path.stem}_naive_metrics.json", "w") as f:
+        with open(hdri_output_dir / f"{hdri_path.stem}_naive_metrics.json", "w") as f:
             json.dump(naive_metrics_dict, f, indent=2)
 
         # Save spherical harmonic metrics
         sph_metrics_dict = sph_metrics_cpu.to_dict()
-        with open(output_dir / f"{hdri_path.stem}_sph_metrics.json", "w") as f:
+        with open(hdri_output_dir / f"{hdri_path.stem}_sph_metrics.json", "w") as f:
             json.dump(sph_metrics_dict, f, indent=2)
 
         # Log timing summary
