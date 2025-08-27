@@ -367,7 +367,7 @@ def _generate_html_template(
         
         .original-row {{
             display: flex;
-            justify-content: center;
+            gap: 3px;
             margin: 3px 0;
         }}
         
@@ -376,8 +376,26 @@ def _generate_html_template(
             background: #ffffff;
             padding: 1px;
             border: 1px inset #c0c0c0;
-            width: 100%;
-            max-width: 1200px;
+            flex: 3;
+        }}
+        
+        .metrics-sidebar {{
+            background: #ffffff;
+            padding: 2px;
+            border: 1px inset #c0c0c0;
+            flex: 2;
+            min-width: 200px;
+            max-width: 400px;
+        }}
+        
+        .metrics-sidebar h2 {{
+            color: #000;
+            margin: 0 0 3px 0;
+            font-size: 0.9rem;
+            background: #c0c0c0;
+            padding: 2px 5px;
+            border: 1px outset #c0c0c0;
+            font-weight: bold;
         }}
         
         .original-container h3 {{
@@ -638,6 +656,15 @@ def _generate_html_template(
         }}
         
         @media (max-width: 768px) {{
+            .original-row {{
+                flex-direction: column;
+            }}
+            
+            .metrics-sidebar {{
+                min-width: auto;
+                max-width: none;
+            }}
+            
             .analysis-row {{
                 grid-template-columns: 1fr;
                 gap: 2px;
@@ -646,10 +673,6 @@ def _generate_html_template(
             .sph-row {{
                 grid-template-columns: 1fr;
                 gap: 2px;
-            }}
-            
-            .original-container {{
-                max-width: 100%;
             }}
             
             .header h1 {{
@@ -671,9 +694,13 @@ def _generate_html_template(
             <div class="section">
                 <h2>Analysis Visualizations</h2>
                 
-                <!-- Row 1: Original HDRI -->
+                <!-- Row 1: Original HDRI with Metrics Sidebar -->
                 <div class="original-row">
                     {original_row}
+                    <div class="metrics-sidebar">
+                        <h2>Analysis Metrics</h2>
+                        {metrics_section}
+                    </div>
                 </div>
                 
                 <!-- Row 2: Analysis Images -->
@@ -688,13 +715,6 @@ def _generate_html_template(
                     {sph_gallery}
                 </div>
             </div>
-            
-            {f'''
-            <div class="section">
-                <h2>Analysis Metrics</h2>
-                {metrics_section}
-            </div>
-            ''' if metrics_section else ''}
         </div>
         
         <div class="footer">
