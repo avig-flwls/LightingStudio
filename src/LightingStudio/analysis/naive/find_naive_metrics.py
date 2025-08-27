@@ -1,5 +1,5 @@
 import argparse
-from ..io import read_exrs, write_exr
+from ..utils.io import read_exrs, write_exr
 from .intensity_calculation import naive_metrics, naive_metrics_cpu
 import torch
 from coolname import generate_slug

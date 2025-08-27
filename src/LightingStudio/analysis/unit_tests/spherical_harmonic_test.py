@@ -12,12 +12,12 @@ import numpy as np
 import time
 from typing import Tuple
 
-from ..sph import (
+from src.LightingStudio.analysis.core.sph import (
     cartesian_to_sph_basis, cartesian_to_sph_basis_vectorized,
     spherical_to_sph_basis, spherical_to_sph_basis_vectorized,
     sph_indices_total, lm_from_index
 )
-from ...utils import generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_spherical
+from src.LightingStudio.analysis.utils.transforms import generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_spherical
 
 
 def test_vectorized_vs_original(cartesian_coordinates: torch.Tensor, l_max: int = 4) -> bool:
@@ -95,79 +95,6 @@ def test_spherical_vectorized_vs_original(spherical_coordinates: torch.Tensor, l
     print(f"✓ Spherical vectorized implementation matches original for l_max={l_max}")
     return True
 
-
-def spherical_allclose(spherical_coords1: torch.Tensor, spherical_coords2: torch.Tensor) -> bool:
-    """
-    Check if two spherical coordinates are close.
-    
-    Coordinate system:
-    - theta (elevation): [-π/2, π/2] where -π/2 is south pole, +π/2 is north pole
-    - phi (azimuthal): [-π, π] wrapping around the unit circle
-    
-    :param spherical_coords1: First spherical coordinates (..., 2)
-    :param spherical_coords2: Second spherical coordinates (..., 2)
-    :return: True if coordinates are close, False otherwise
-    """
-    theta_a, phi_a = spherical_coords1[..., 0], spherical_coords1[..., 1]
-    theta_b, phi_b = spherical_coords2[..., 0], spherical_coords2[..., 1]
-
-    # Check for finite values
-    finite_a = torch.isfinite(theta_a) & torch.isfinite(phi_a)
-    finite_b = torch.isfinite(theta_b) & torch.isfinite(phi_b)
-    both_finite = finite_a & finite_b
-    
-    # If not both finite, they're not close
-    if not torch.all(both_finite):
-        return False
-
-    # Theta comparison: direct comparison since theta ∈ [-π/2, π/2]
-    theta_close = torch.abs(theta_a - theta_b) <= 1e-6
-
-    # Pole detection: at poles (theta ≈ ±π/2), phi is undefined
-    # cos(theta) ≈ 0 when theta ≈ ±π/2
-    cos_theta_a = torch.cos(theta_a)
-    cos_theta_b = torch.cos(theta_b)
-    at_pole_a = torch.abs(cos_theta_a) <= 1e-6
-    at_pole_b = torch.abs(cos_theta_b) <= 1e-6
-    either_at_pole = at_pole_a | at_pole_b
-
-    # Phi comparison: handle wrapping on unit circle
-    # For points not at poles, compare phi with proper wrapping
-    dphi = phi_a - phi_b
-    # Normalize to [-π, π] using atan2 to handle wrapping
-    dphi_wrapped = torch.atan2(torch.sin(dphi), torch.cos(dphi))
-    phi_close = torch.abs(dphi_wrapped) <= 1e-6
-    
-    # At poles, phi is undefined, so we ignore phi comparison
-    phi_close_or_pole = phi_close | either_at_pole
-
-    return torch.all(theta_close & phi_close_or_pole)
-
-
-def test_coordinate_conversion_roundtrip(spherical_coordinates: torch.Tensor) -> bool:
-    """
-    Test that coordinate conversion functions are inverse operations.
-    
-    Verifies that spherical -> cartesian -> spherical returns the original coordinates.
-    
-    :param spherical_coordinates: Test spherical coordinates (theta, phi)
-    :return: True if conversion roundtrip is successful
-    """
-    cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
-    converted_back = cartesian_to_spherical(cartesian_coordinates)
-    
-    if not spherical_allclose(spherical_coordinates, converted_back):
-        print("❌ Coordinate conversion roundtrip failed!")
-        print(f"Original spherical coordinates: {spherical_coordinates.shape}")
-        print(f"Converted back spherical coordinates: {converted_back.shape}")
-        print(f"Original: {spherical_coordinates}")
-        print(f"Converted back: {converted_back}")
-        return False
-    
-    print("✓ Coordinate conversion roundtrip successful")
-    return True
-
-
 def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4, device: torch.device = None) -> Tuple[bool, dict]:
     """
     Test to compare cartesian basis vs spherical basis functions for accuracy and speed.
@@ -183,10 +110,6 @@ def test_cartesian_vs_spherical_basis(H: int = 64, W: int = 128, l_max: int = 4,
     # Generate test coordinates
     spherical_coordinates = generate_spherical_coordinates_map(H, W, device)
     cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
-
-    # Verify coordinate conversion roundtrip
-    if not test_coordinate_conversion_roundtrip(spherical_coordinates):
-        assert False, "Coordinate conversion roundtrip failed"
 
     timing_results = {}
     
@@ -287,12 +210,7 @@ def run_all_sanity_checks(H: int = 64, W: int = 128, l_max: int = 4) -> dict:
     # Generate test coordinates
     spherical_coordinates = generate_spherical_coordinates_map(H, W, device)
     cartesian_coordinates = spherical_to_cartesian(spherical_coordinates)
-    
-    # Test 1: Coordinate Conversion Roundtrip
-    print("1. Testing Coordinate Conversion Roundtrip:")
-    results['coordinate_conversion_match'] = test_coordinate_conversion_roundtrip(spherical_coordinates)
-    print()
-    
+   
     # Test 2: Vectorized vs Original (Cartesian)
     print("2. Testing Cartesian Vectorized vs Original:")
     results['cartesian_vectorized_match'] = test_vectorized_vs_original(cartesian_coordinates, l_max)
@@ -313,7 +231,6 @@ def run_all_sanity_checks(H: int = 64, W: int = 128, l_max: int = 4) -> dict:
     # Summary
     print("=" * 60)
     print("SUMMARY:")
-    print(f"✓ Coordinate conversion roundtrip works: {results['coordinate_conversion_match']}")
     print(f"✓ All vectorized implementations match: {all([results['cartesian_vectorized_match'], results['spherical_vectorized_match']])}")
     print(f"✓ Cartesian and Spherical basis match: {results['basis_accuracy_match']}")
     print(f"✓ Fastest method: {min(timing_results.items(), key=lambda x: x[1])[0]}")
@@ -344,7 +261,6 @@ def main():
     
     # Check if all tests passed
     all_passed = (
-        results['coordinate_conversion_match'] and
         results['cartesian_vectorized_match'] and 
         results['spherical_vectorized_match'] and 
         results['basis_accuracy_match']

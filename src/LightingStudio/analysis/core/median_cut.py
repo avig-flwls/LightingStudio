@@ -11,8 +11,8 @@ import logging
 from typing import List, Tuple, Dict, Any, Optional, Union
 import torch
 
-from ..utils import luminance, pixel_solid_angles, generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_pixel
-from ..datatypes import Region, SampleGPU, SampleCPU
+from src.LightingStudio.analysis.utils.transforms import luminance, pixel_solid_angles, generate_spherical_coordinates_map, spherical_to_cartesian, cartesian_to_pixel
+from src.LightingStudio.analysis.report.datatypes import Region, SampleGPU, SampleCPU
 
 
 def cumulative_axis_sums(energy: torch.Tensor, axis: int) -> torch.Tensor:

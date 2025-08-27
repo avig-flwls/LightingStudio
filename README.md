@@ -38,3 +38,10 @@ set foundry_LICENSE=4101@license.us-west-2.root.flwls-infra.net
 cd LightingStudio
 python src/LightingStudio/ingest/scrape_polyhaven.py --max-downloads 5 --max-resolution 1k --root-output-dir .\tmp\source\
 ```
+
+tests
+```
+python -m src.LightingStudio.analysis.unit_tests.spherical_harmonic_test -H 1024 -W 2048 --l-max 4
+python -m src.LightingStudio.analysis.unit_tests.transforms_test  -H 1024 -W 2048
+python -m src.LightingStudio.analysis.unit_tests.view_solid_angle_test
+```

@@ -1,7 +1,7 @@
 import torch
 from typing import Optional
-from ..utils import pixel_solid_angles, luminance
-from ..datatypes import NaiveMetricsGPU, NaiveMetricsCPU
+from src.LightingStudio.analysis.utils.transforms import pixel_solid_angles, luminance
+from src.LightingStudio.analysis.report.datatypes import NaiveMetricsGPU, NaiveMetricsCPU
 
 
 def naive_metrics(env_map: torch.Tensor, device: Optional[torch.device] = None) -> NaiveMetricsGPU:

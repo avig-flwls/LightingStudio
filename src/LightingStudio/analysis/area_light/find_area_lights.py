@@ -1,4 +1,4 @@
-from ..io import read_exrs, write_exr
+from ..utils.io import read_exrs, write_exr
 import argparse
 from ..point_light.median_cut import median_cut_sampling, median_cut_sampling_to_cpu, visualize_samples
 from .density_estimation import expand_map_exact, expand_map_fast

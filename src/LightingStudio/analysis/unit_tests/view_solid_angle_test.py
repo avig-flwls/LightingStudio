@@ -2,8 +2,8 @@ import torch
 import numpy as np
 from pathlib import Path
 from coolname import generate_slug
-from .utils import pixel_solid_angles
-from .io import write_exr
+from src.LightingStudio.analysis.utils.transforms import pixel_solid_angles
+from src.LightingStudio.analysis.utils.io import write_exr
 from einops import repeat
 
 

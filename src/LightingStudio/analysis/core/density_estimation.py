@@ -11,7 +11,7 @@ import numpy as np
 import cv2
 from scipy.spatial import cKDTree
 from typing import List, Union
-from ..datatypes import SampleGPU, SampleCPU
+from src.LightingStudio.analysis.report.datatypes import SampleGPU, SampleCPU
 
 def expand_map_exact(hdri: torch.Tensor, samples: List[Union[SampleGPU, SampleCPU]],
                      rt: int = 16, gamma: float = 0.918, beta: float = 1.953,
