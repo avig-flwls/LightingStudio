@@ -52,6 +52,7 @@ class NaiveMetricsCPU:
 @dataclass
 class SPHMetrics:
     """A report for the lighting analysis."""
+    dc_color: torch.Tensor # DC Term (3)
     sph_coeffs: torch.Tensor # Spherical Harmonic Coefficients (n_terms, 3) 
 
     # Dominant Direction (all normalized)
@@ -77,6 +78,8 @@ class SPHMetrics:
 @dataclass
 class SPHMetricsCPU:
     """A report for the lighting analysis with CPU/serializable data."""
+
+    dc_color: List[float] # DC Term (3) as list
     sph_coeffs: List[List[float]] # Spherical Harmonic Coefficients (n_terms, 3) as nested list
 
     # Dominant Direction (all normalized)
@@ -102,6 +105,7 @@ class SPHMetricsCPU:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
+            'dc_color': self.dc_color,
             'sph_coeffs': self.sph_coeffs,
             'dominant_direction': self.dominant_direction,
             'dominant_direction_rgb_color_difference': self.dominant_direction_rgb_color_difference,

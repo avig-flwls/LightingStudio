@@ -657,8 +657,8 @@ def get_dominant_color(dominant_direction: torch.Tensor, env_map_sph_coeffs: tor
 
     # TODO: maybe we need to normalize the light??
     # direction_sph_coeffs *= (16*np.pi)/17
-    # denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
-    denominator = 1
+    denominator = torch.dot(direction_sph_coeffs, direction_sph_coeffs)
+    # denominator = 1
 
     color = torch.tensor([torch.dot(sph_coeffs_r, direction_sph_coeffs) / denominator,
                                   torch.dot(sph_coeffs_g, direction_sph_coeffs) / denominator,
@@ -772,8 +772,13 @@ def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
     H, W, _ = env_map.shape
 
     # Get Spherical Harmonic Coefficients
-    env_map_sph_coeffs, _ = project_env_to_coefficients(env_map, l_max)
-    
+    env_map_sph_coeffs, sph_basis = project_env_to_coefficients(env_map, l_max)
+    env_map_reconstructed = reconstruct_sph_coeffs_to_env(H, W, env_map_sph_coeffs, sph_basis)
+
+    # Get DC Term
+    dc_color = env_map_reconstructed[0, 0, 0, :] # any pixel is fine since it is the same for all pixels
+    dc_color = 255 * (dc_color / torch.linalg.norm(dc_color))
+
     # Get Dominant Direction
     dd, dd_rgb_color_difference, dd_rgb_luminance = get_dominant_direction(env_map_sph_coeffs)
 
@@ -794,6 +799,7 @@ def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
     area_intensity_rgb_luminance = get_area_normalization_term(env_map_sph_coeffs, cos_lobe_sph_coeffs, cartesian_direction=dd_rgb_luminance, l_max=l_max)
 
     return SPHMetrics(
+        dc_color=dc_color,
         sph_coeffs=env_map_sph_coeffs,
         dominant_direction=dd,
         dominant_direction_rgb_color_difference=dd_rgb_color_difference,
@@ -815,6 +821,7 @@ def get_sph_metrics_cpu(env_map: torch.Tensor, l_max: int) -> SPHMetricsCPU:
     
     # Convert all tensors to CPU and then to lists/floats
     cpu_metrics = SPHMetricsCPU(
+        dc_color=metrics.dc_color.cpu().numpy().tolist(),
         sph_coeffs=metrics.sph_coeffs.cpu().numpy().tolist(),
         dominant_direction=metrics.dominant_direction.cpu().numpy().tolist(),
         dominant_direction_rgb_color_difference=metrics.dominant_direction_rgb_color_difference.cpu().numpy().tolist(),

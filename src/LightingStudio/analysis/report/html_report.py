@@ -209,7 +209,10 @@ def _generate_html_template(
             <div class="metrics-grid">
                 <div class="metric">
                     <span class="metric-label">Global Color:</span>
-                    <div class="color-display" style="background-color: {color_hex};" title="RGB: {global_color}"></div>
+                    <div class="color-with-values">
+                        <div class="color-display" style="background-color: {color_hex};" title="RGB: {global_color}"></div>
+                        <span class="color-values">[{global_color[0]:.0f}, {global_color[1]:.0f}, {global_color[2]:.0f}]</span>
+                    </div>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Global Intensity:</span>
@@ -222,6 +225,7 @@ def _generate_html_template(
     if metrics.get('sph'):
         sph = metrics['sph']
         dominant_color = sph.get('dominant_color', [0, 0, 0])
+        dc_color = sph.get('dc_color', [0, 0, 0])
         area_intensity = sph.get('area_intensity', [0, 0, 0])
         
         # Show area intensity as RGB vector
@@ -232,14 +236,25 @@ def _generate_html_template(
             area_intensity_str = f"[{r:.4f}, {g:.4f}, {b:.4f}]"
         
         dominant_color_hex = rgb_to_hex(dominant_color)
+        dc_color_hex = rgb_to_hex(dc_color)
         
         metrics_section += f"""
         <div class="metrics-group">
             <h3>Spherical Harmonic Metrics</h3>
             <div class="metrics-grid">
                 <div class="metric">
+                    <span class="metric-label">L=0 Color (DC Term):</span>
+                    <div class="color-with-values">
+                        <div class="color-display" style="background-color: {dc_color_hex};" title="RGB: {dc_color}"></div>
+                        <span class="color-values">[{dc_color[0]:.0f}, {dc_color[1]:.0f}, {dc_color[2]:.0f}]</span>
+                    </div>
+                </div>
+                <div class="metric">
                     <span class="metric-label">Dominant Color:</span>
-                    <div class="color-display" style="background-color: {dominant_color_hex};" title="RGB: {dominant_color}"></div>
+                    <div class="color-with-values">
+                        <div class="color-display" style="background-color: {dominant_color_hex};" title="RGB: {dominant_color}"></div>
+                        <span class="color-values">[{dominant_color[0]:.0f}, {dominant_color[1]:.0f}, {dominant_color[2]:.0f}]</span>
+                    </div>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Dominant Area Intensity:</span>
@@ -588,15 +603,31 @@ def _generate_html_template(
             font-size: 0.8rem;
         }}
         
+        .color-with-values {{
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }}
+        
         .color-display {{
             width: 40px;
             height: 20px;
             border: 1px solid #000;
             cursor: pointer;
+            flex-shrink: 0;
         }}
         
         .color-display:hover {{
             border: 2px solid #000;
+        }}
+        
+        .color-values {{
+            font-family: 'Courier New', monospace;
+            font-size: 0.7rem;
+            color: #000;
+            background: #f0f0f0;
+            padding: 1px 3px;
+            border: 1px inset #c0c0c0;
         }}
         
         /* Modal styles */
