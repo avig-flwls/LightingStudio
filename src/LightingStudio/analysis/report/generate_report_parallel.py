@@ -35,6 +35,23 @@ from src.LightingStudio.analysis.report.aggregate_statistics import generate_agg
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
+# Usage examples:
+# 
+# Process a single HDRI file (saves both EXR and PNG):
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --hdri "path/to/file.exr" --n_samples 1024 --l_max 3
+#
+# Process a single HDRI file (PNG only for faster processing):
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --hdri "path/to/file.exr" --n_samples 1024 --l_max 3 --png-only
+#
+# Process all HDRI files in a folder with parallel processing (auto-detects CPU cores):
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only
+#
+# Process with specific number of parallel processes:
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 4
+#
+# Process sequentially (single-threaded):
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 1
+
 
 def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png_only, device_str="cuda"):
     """
@@ -169,23 +186,6 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
             'error': str(e)
         }
 
-# Usage examples:
-# 
-# Process a single HDRI file (saves both EXR and PNG):
-# python -m src.LightingStudio.analysis.report.generate_report --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" --n_samples 1024 --l_max 3
-#
-# Process a single HDRI file (PNG only for faster processing):
-# python -m src.LightingStudio.analysis.report.generate_report --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" --n_samples 1024 --l_max 3 --png-only
-#
-# Process multiple HDRI files (also generates aggregate statistics):
-# python -m src.LightingStudio.analysis.report.generate_report --hdri "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Bakery.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Games Room 02.exr" "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k\Abandoned Factory Canteen 02.exr" --n_samples 1024 --l_max 3
-#
-# Process all HDRI files in a folder with PNG-only mode for speed:
-# python -m src.LightingStudio.analysis.report.generate_report --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k" --n_samples 1024 --l_max 3 --png-only
-# python -m src.LightingStudio.analysis.report.generate_report --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k_small" --n_samples 1024 --l_max 3 --png-only
-# Generate aggregate statistics for existing experiment:
-# python -m src.LightingStudio.analysis.report.aggregate_statistics "C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments\experiment-name"
-
 
 if __name__ == "__main__":
     # Configure logging
@@ -216,9 +216,6 @@ if __name__ == "__main__":
         logging.getLogger().setLevel(logging.DEBUG)
         print("Debug logging enabled")
 
-    # if args.n_samples < 1024:
-    #     parser.error("The value of --n_samples must be greater than 1024.")
-
     # Determine HDRI file paths based on input type
     if args.hdri:
         hdri_paths = args.hdri
@@ -244,9 +241,6 @@ if __name__ == "__main__":
 
     # Set up logger for this script
     logger = logging.getLogger(__name__)
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
     
     # ------------------------------------------------------------
     # Validate files first to build navigation list
@@ -360,188 +354,19 @@ if __name__ == "__main__":
     
     # Update hdri_names to only include successful ones for aggregate stats
     successful_hdri_names = [r['hdri_name'] for r in successful_results]
-        print(f"Processing {hdri_path}...")
-        
-        # Read the HDRI file (we know it's valid from validation)
-        hdri = read_exr(str(hdri_path)).to(device)
-        logger.info(f"Processing {hdri_path.name} with shape {hdri.shape}")
-
-        # Create subfolder for this HDRI
-        hdri_output_dir = output_dir / hdri_path.stem
-        hdri_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"HDRI output directory: {hdri_output_dir}")
-
-        # ------------------------------------------------------------
-        # Start Analysis
-        # ------------------------------------------------------------
-
-        # Start analysis
-        print("Starting analysis...")
-        
-        # Time median cut sampling
-        start_time = time.time()
-        samples_cpu = median_cut_sampling_to_cpu(hdri, args.n_samples)
-        sampling_time = time.time() - start_time
-        logger.info(f"Median cut sampling complete in {sampling_time:.2f} seconds.")
-        
-        # Time exact density map
-        start_time = time.time()
-        # density_map_exact = expand_map_exact(hdri, samples_cpu, min_count=4, normalize=True)
-        exact_time = time.time() - start_time
-        logger.info(f"Exact density map complete in {exact_time:.2f} seconds.")
-        
-        # Time fast density map
-        start_time = time.time()
-        density_map_fast = expand_map_fast(hdri, samples_cpu, min_count=4, normalize=True)
-        fast_time = time.time() - start_time
-        logger.info(f"Fast density map complete in {fast_time:.2f} seconds.")
-
-        # Time naive metrics
-        start_time = time.time()
-        naive_metrics_cpu(hdri)
-        naive_time = time.time() - start_time
-        logger.info(f"Naive metrics complete in {naive_time:.2f} seconds.")
-
-        # Time spherical harmonic projection 
-        start_time = time.time()
-        env_map_sph_coeffs, sph_basis = project_env_to_coefficients(hdri, args.l_max)
-        project_time = time.time() - start_time
-        logger.info(f"Spherical harmonic projection complete in {project_time:.2f} seconds.")
-
-        # Time spherical harmonic reconstruction
-        start_time = time.time()
-        env_map_reconstructed = reconstruct_sph_coeffs_to_env(hdri.shape[0], hdri.shape[1], env_map_sph_coeffs, sph_basis)
-        reconstruct_time = time.time() - start_time
-        logger.info(f"Spherical harmonic reconstruction complete in {reconstruct_time:.2f} seconds.")
-
-        # Time spherical harmonic metrics
-        start_time = time.time()
-        sph_metrics_cpu = get_sph_metrics_cpu(hdri, args.l_max)
-        sph_metrics_time = time.time() - start_time
-        logger.info(f"Spherical harmonic metrics complete in {sph_metrics_time:.2f} seconds.")
-
-        # ------------------------------------------------------------
-        # Save images based on --png-only flag
-        # ------------------------------------------------------------
-        
-        # Create web directory
-        web_dir = hdri_output_dir / "web"
-        web_dir.mkdir(parents=True, exist_ok=True)
-        
-        if args.png_only:
-            print(f"Saving images as PNG only for {hdri_path.stem}")
-            
-            # Save original HDRI as PNG only
-            exr_to_png_tensor(hdri, web_dir / f"{hdri_path.stem}_original.png", gamma=2.2, exposure=0.0)
-
-            # Save density map as PNG only
-            exr_to_png_tensor(density_map_fast, web_dir / f"{hdri_path.stem}_density_map_fast.png", gamma=2.2, exposure=0.0)
-
-            # Save samples visualization as PNG only
-            vis_hdri = visualize_samples(hdri, samples_cpu)
-            exr_to_png_tensor(vis_hdri, web_dir / f"{hdri_path.stem}_median_cut.png", gamma=2.2, exposure=0.0)
-
-            # Save reconstructed environment maps as PNG only
-            for l in range(args.l_max + 1):
-                exr_to_png_tensor(env_map_reconstructed[l, ...], web_dir / f"{hdri_path.stem}_reconstructed_{l}.png", gamma=2.2, exposure=0.0)
-
-            # Save spherical harmonic metrics visualization as PNG only
-            vis_sph_metrics = visualize_sph_metrics(hdri, sph_metrics_cpu)
-            exr_to_png_tensor(vis_sph_metrics, web_dir / f"{hdri_path.stem}_sph_metrics.png", gamma=2.2, exposure=0.0)
-        
-        else:
-            print(f"Saving images as both EXR and PNG for {hdri_path.stem}")
-            
-            # Save original HDRI as both EXR and PNG
-            write_exr(hdri, hdri_output_dir / f"{hdri_path.stem}_original.exr")
-            exr_to_png_tensor(hdri, web_dir / f"{hdri_path.stem}_original.png", gamma=2.2, exposure=0.0)
-
-            # Save density map as both EXR and PNG
-            write_exr(density_map_fast, hdri_output_dir / f"{hdri_path.stem}_density_map_fast.exr")
-            exr_to_png_tensor(density_map_fast, web_dir / f"{hdri_path.stem}_density_map_fast.png", gamma=2.2, exposure=0.0)
-
-            # Save samples visualization as both EXR and PNG
-            vis_hdri = visualize_samples(hdri, samples_cpu)
-            write_exr(vis_hdri, hdri_output_dir / f"{hdri_path.stem}_median_cut.exr")
-            exr_to_png_tensor(vis_hdri, web_dir / f"{hdri_path.stem}_median_cut.png", gamma=2.2, exposure=0.0)
-
-            # Save reconstructed environment maps as both EXR and PNG
-            for l in range(args.l_max + 1):
-                write_exr(env_map_reconstructed[l, ...], hdri_output_dir / f"{hdri_path.stem}_reconstructed_{l}.exr")
-                exr_to_png_tensor(env_map_reconstructed[l, ...], web_dir / f"{hdri_path.stem}_reconstructed_{l}.png", gamma=2.2, exposure=0.0)
-
-            # Save spherical harmonic metrics visualization as both EXR and PNG
-            vis_sph_metrics = visualize_sph_metrics(hdri, sph_metrics_cpu)
-            write_exr(vis_sph_metrics, hdri_output_dir / f"{hdri_path.stem}_sph_metrics.exr")
-            exr_to_png_tensor(vis_sph_metrics, web_dir / f"{hdri_path.stem}_sph_metrics.png", gamma=2.2, exposure=0.0)
-
-        # ------------------------------------------------------------
-        # Save Metrics as JSON
-        # ------------------------------------------------------------
-
-        # Save samples 
-        samples_dict = [sample.to_dict() for sample in samples_cpu]
-        with open(hdri_output_dir / f"{hdri_path.stem}_samples.json", "w") as f:
-            json.dump(samples_dict, f, indent=2)
-
-        # Save naive metrics
-        naive_metrics_dict = naive_metrics_cpu(hdri).to_dict()
-        with open(hdri_output_dir / f"{hdri_path.stem}_naive_metrics.json", "w") as f:
-            json.dump(naive_metrics_dict, f, indent=2)
-
-        # Save spherical harmonic metrics
-        sph_metrics_dict = sph_metrics_cpu.to_dict()
-        with open(hdri_output_dir / f"{hdri_path.stem}_sph_metrics.json", "w") as f:
-            json.dump(sph_metrics_dict, f, indent=2)
-
-        # Log timing summary
-        total_time = sampling_time + exact_time + fast_time + naive_time + project_time + reconstruct_time + sph_metrics_time
-        logger.info(f"Timing Summary for {hdri_path.stem}:")
-        logger.info(f"  Median cut sampling: {sampling_time:.2f}s")
-        logger.info(f"  Exact density map:   {exact_time:.2f}s")
-        logger.info(f"  Fast density map:    {fast_time:.2f}s")
-        logger.info(f"  Naive metrics:       {naive_time:.2f}s")
-        logger.info(f"  Spherical harmonic projection: {project_time:.2f}s")
-        logger.info(f"  Spherical harmonic reconstruction: {reconstruct_time:.2f}s")
-        logger.info(f"  Spherical harmonic metrics: {sph_metrics_time:.2f}s")
-        logger.info(f"  Total analysis time: {total_time:.2f}s")
-        logger.info("-" * 50)
-
-        # ------------------------------------------------------------
-        # Generate HTML Report
-        # ------------------------------------------------------------
-        
-        html_path = generate_html_report(hdri_output_dir, hdri_path.stem, hdri_names)
-        logger.info(f"HTML report generated: {html_path}")
-
-    # ------------------------------------------------------------
-    # Processing Summary
-    # ------------------------------------------------------------
-    logger.info(f"Processing complete: {len(valid_hdri_paths)}/{len(hdri_paths)} files processed successfully")
-    print(f"Processing complete: {len(valid_hdri_paths)}/{len(hdri_paths)} files processed successfully")
 
     # ------------------------------------------------------------
     # Generate Aggregate Statistics (after all individual reports)
     # ------------------------------------------------------------
     
-    if len(hdri_names) > 1:  # Only generate if we have multiple HDRIs
+    if len(successful_hdri_names) > 1:  # Only generate if we have multiple HDRIs
         logger.info("Generating aggregate statistics...")
         print("Generating aggregate statistics...")
-        
-        # Quick verification that JSON files exist
-        json_files_found = 0
-        for hdri_name in hdri_names:
-            hdri_subdir = output_dir / hdri_name
-            naive_path = hdri_subdir / f"{hdri_name}_naive_metrics.json"
-            sph_path = hdri_subdir / f"{hdri_name}_sph_metrics.json"
-            if naive_path.exists() and sph_path.exists():
-                json_files_found += 1
-                
-        logger.info(f"Found JSON files for {json_files_found}/{len(hdri_names)} HDRIs")
-        print(f"Found JSON files for {json_files_found}/{len(hdri_names)} HDRIs")
         
         aggregate_html_path = generate_aggregate_statistics_html(output_dir)
         logger.info(f"Aggregate statistics generated: {aggregate_html_path}")
         print(f"Aggregate statistics webpage created: {aggregate_html_path}")
-
- 
+    elif len(successful_hdri_names) == 1:
+        print("Only one HDRI processed successfully - skipping aggregate statistics")
+    else:
+        print("No HDRIs processed successfully - cannot generate aggregate statistics")

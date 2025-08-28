@@ -1261,16 +1261,6 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
     print(f"  Global intensity histogram: {len(visualizations['global_intensity'][0]) if visualizations['global_intensity'][0] else 0} bins")
     print(f"  Area intensity histogram: {len(visualizations['area_intensity']['r'][0]) if visualizations['area_intensity']['r'][0] else 0} bins")
 
-    # Color scatter plots (HSV wheel) - use sampled data
-    print(f"  Creating HSV color scatter plots from {len(viz_data['global_color'])} colors...")
-    visualizations['global_color'] = create_color_scatter_data(viz_data['global_color'], viz_data['hdri_names'])
-    visualizations['dc_color'] = create_color_scatter_data(viz_data['dc_color'], viz_data['hdri_names'])
-    visualizations['dominant_color'] = create_color_scatter_data(viz_data['dominant_color'], viz_data['hdri_names'])
-    
-    print(f"  Global color scatter: {len(visualizations['global_color']['polar'])} points")
-    print(f"  DC color scatter: {len(visualizations['dc_color']['polar'])} points")
-    print(f"  Dominant color scatter: {len(visualizations['dominant_color']['polar'])} points")
-
     # Perceptual color scatter plots (CIELAB a*b* maps) - use sampled data
     print(f"  Creating CIELAB visualizations...")
     
@@ -1424,72 +1414,7 @@ def _generate_aggregate_html_template(
         }});
         """
 
-    # ------------------ HSV Color Scatter Charts ------------------
-    color_metrics = [
-        ('global_color', 'Global Color', 'globalColorChart'),
-        ('dc_color', 'DC Color', 'dcColorChart'),
-        ('dominant_color', 'Dominant Color', 'dominantColorChart')
-    ]
-    
-    for metric_key, metric_title, chart_id in color_metrics:
-        viz = visualizations[metric_key]
-        if viz['polar'] and len(viz['polar']) > 0:
-            points = [{'x': float(x), 'y': float(y)} for x, y in viz['polar']]
-            charts_js += f"""
-            // {metric_title} HSV Scatter
-            var {chart_id}Ctx = document.getElementById('{chart_id}').getContext('2d');
-            new Chart({chart_id}Ctx, {{
-                type: 'scatter',
-                data: {{
-                    datasets: [{{
-                        label: '{metric_title}',
-                        data: {to_js(points)},
-                        pointBackgroundColor: {to_js(viz['colors'])},
-                        pointBorderColor: '#000',
-                        pointBorderWidth: 1,
-                        pointRadius: {to_js([max(3, min(8, b*8)) for b in viz['brightness']])}
-                    }}]
-                }},
-                options: {{
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: {{
-                        title: {{ display: true, text: '{metric_title} — HSV Color Wheel' }},
-                        legend: {{ display: false }}
-                    }},
-                    scales: {{
-                        x: {{ 
-                            min: -1, max: 1,
-                            title: {{ display: true, text: 'Hue/Saturation X' }},
-                            grid: {{ display: true }}
-                        }},
-                        y: {{ 
-                            min: -1, max: 1,
-                            title: {{ display: true, text: 'Hue/Saturation Y' }},
-                            grid: {{ display: true }}
-                        }}
-                    }},
-                    interaction: {{
-                        intersect: false
-                    }},
-                    plugins: {{
-                        tooltip: {{
-                            callbacks: {{
-                                title: function(context) {{
-                                    const index = context[0].dataIndex;
-                                    return {to_js(viz['names'])}[index];
-                                }},
-                                label: function(context) {{
-                                    const index = context.dataIndex;
-                                    const brightness = {to_js(viz['brightness'])}[index];
-                                    return `Brightness: ${{brightness.toFixed(3)}}`;
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-            }});
-            """
+    # HSV Color Scatter Charts removed for simplicity
 
     # ------------------ CIELAB a*b* scatters (perceptual) ------------------
     def lab_scatter(metric_key: str, metric_title: str, chart_id: str, bg_id: str) -> str:
@@ -1758,7 +1683,7 @@ def _generate_aggregate_html_template(
     .content {{ display:grid; grid-template-columns:2fr 1fr; gap:20px; }}
     .charts-section, .stats-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; }}
     .intensity-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
-    .color-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+
     .cielab-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
     .lab-grid {{ display:grid; grid-template-columns:repeat(3, 1fr); gap:20px; align-items:center; justify-items:center; }}
     .stats-section {{ /* removed max-height and overflow */ }}
@@ -1850,23 +1775,7 @@ def _generate_aggregate_html_template(
         </div>
     </div>
 
-    <div class=\"color-section\">
-        <h2>HSV Color Scatter Plots</h2>
-        <div style=\"display:grid; grid-template-columns:repeat(3, 1fr); gap:20px;\">
-            <div class=\"color-chart-container\">
-                <div class=\"color-wheel-bg\"></div>
-                <canvas id=\"globalColorChart\"></canvas>
-            </div>
-            <div class=\"color-chart-container\">
-                <div class=\"color-wheel-bg\"></div>
-                <canvas id=\"dcColorChart\"></canvas>
-            </div>
-            <div class=\"color-chart-container\">
-                <div class=\"color-wheel-bg\"></div>
-                <canvas id=\"dominantColorChart\"></canvas>
-            </div>
-        </div>
-    </div>
+
 
     <div class=\"cielab-section\">
         <h2>Perceptual Color Maps (CIELAB)</h2>
