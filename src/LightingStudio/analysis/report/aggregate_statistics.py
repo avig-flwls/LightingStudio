@@ -857,7 +857,8 @@ def collect_experiment_metrics(experiment_dir: Path) -> Dict[str, List]:
         # SPH metrics
         'dc_color': [],
         'dominant_color': [],
-        'area_intensity': []
+        'area_intensity': [],
+        'dominant_direction': []
     }
 
     # Find all HDRI subdirectories
@@ -891,6 +892,7 @@ def collect_experiment_metrics(experiment_dir: Path) -> Dict[str, List]:
                     metrics_data['dc_color'].append(sph_data.get('dc_color', [0, 0, 0]))
                     metrics_data['dominant_color'].append(sph_data.get('dominant_color', [0, 0, 0]))
                     metrics_data['area_intensity'].append(sph_data.get('area_intensity', [0, 0, 0]))
+                    metrics_data['dominant_direction'].append(sph_data.get('dominant_direction', [0, 0, 0]))
 
     print(f"Collected metrics from {len(metrics_data['hdri_names'])} HDRIs out of {subdirs_found} directories")
     
@@ -1072,6 +1074,43 @@ def create_3d_rgb_scatter_data(rgb_values: List[List[float]], hdri_names: List[s
         return {'xyz': [], 'colors': [], 'names': []}
 
 
+def create_3d_direction_scatter_data(direction_values: List[List[float]], hdri_names: List[str], dominant_colors: List[List[float]] = None) -> Dict:
+    """Create 3D scatter plot data for dominant direction vectors."""
+    if not direction_values:
+        return {'xyz': [], 'colors': [], 'names': []}
+
+    try:
+        # Direction values should already be normalized unit vectors
+        # Create 3D coordinates where first component=x, second=y, third=z
+        xyz_coords = [[float(d[0]), float(d[1]), float(d[2])] for d in direction_values if len(d) >= 3]
+        
+        # Use the actual dominant colors if provided, otherwise fall back to direction-based colors
+        if dominant_colors and len(dominant_colors) == len(direction_values):
+            def rgb_to_color_string(rgb):
+                r, g, b = [int(np.clip(c, 0, 255)) for c in rgb]
+                return f"rgb({r}, {g}, {b})"
+            
+            colors = [rgb_to_color_string(color) for color in dominant_colors if len(color) >= 3]
+        else:
+            # Fallback: create colors based on direction - use direction components as RGB
+            # Map from [-1,1] to [0,255] for color visualization
+            def direction_to_rgb_color(direction):
+                # Normalize direction components from [-1,1] to [0,1] then to [0,255]
+                r = int(np.clip((direction[0] + 1) * 127.5, 0, 255))
+                g = int(np.clip((direction[1] + 1) * 127.5, 0, 255))
+                b = int(np.clip((direction[2] + 1) * 127.5, 0, 255))
+                return f"rgb({r}, {g}, {b})"
+
+            colors = [direction_to_rgb_color(direction) for direction in direction_values if len(direction) >= 3]
+        
+        names = [hdri_names[i] if i < len(hdri_names) else f"HDRI_{i}" for i in range(len(direction_values))]
+
+        return {'xyz': xyz_coords, 'colors': colors, 'names': names}
+    except Exception as e:
+        print(f"Error in create_3d_direction_scatter_data: {e}")
+        return {'xyz': [], 'colors': [], 'names': []}
+
+
 # ==============================
 # Main HTML generator (extended with LAB views)
 # ==============================
@@ -1123,6 +1162,16 @@ def create_dataframe_from_metrics(metrics_data: Dict[str, List]) -> pd.DataFrame
         data_dict['area_r'].append(rgb_list[0] if len(rgb_list) > 0 else 0)
         data_dict['area_g'].append(rgb_list[1] if len(rgb_list) > 1 else 0)
         data_dict['area_b'].append(rgb_list[2] if len(rgb_list) > 2 else 0)
+    
+    # Dominant direction
+    for i, dir_list in enumerate(metrics_data['dominant_direction']):
+        if i == 0:
+            data_dict['dominant_direction_x'] = []
+            data_dict['dominant_direction_y'] = []
+            data_dict['dominant_direction_z'] = []
+        data_dict['dominant_direction_x'].append(dir_list[0] if len(dir_list) > 0 else 0)
+        data_dict['dominant_direction_y'].append(dir_list[1] if len(dir_list) > 1 else 0)
+        data_dict['dominant_direction_z'].append(dir_list[2] if len(dir_list) > 2 else 0)
     
     return pd.DataFrame(data_dict)
 
@@ -1268,7 +1317,8 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
             'global_intensity': viz_df['global_intensity'].tolist(),
             'dc_color': viz_df[['dc_r', 'dc_g', 'dc_b']].values.tolist(),
             'dominant_color': viz_df[['dominant_r', 'dominant_g', 'dominant_b']].values.tolist(),
-            'area_intensity': viz_df[['area_r', 'area_g', 'area_b']].values.tolist()
+            'area_intensity': viz_df[['area_r', 'area_g', 'area_b']].values.tolist(),
+            'dominant_direction': viz_df[['dominant_direction_x', 'dominant_direction_y', 'dominant_direction_z']].values.tolist()
         }
     else:
         print(f"Small dataset ({num_hdris} HDRIs). Using all data for visualization.")
@@ -1309,6 +1359,17 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
     print(f"  Global color 3D: {len(visualizations['global_color_3d']['xyz'])} points")
     print(f"  DC color 3D: {len(visualizations['dc_color_3d']['xyz'])} points")
     print(f"  Dominant color 3D: {len(visualizations['dominant_color_3d']['xyz'])} points")
+
+    # 3D Direction scatter plot - use sampled data
+    print(f"  Creating 3D dominant direction visualization...")
+    
+    visualizations['dominant_direction_3d'] = create_3d_direction_scatter_data(
+        viz_data['dominant_direction'], 
+        viz_data['hdri_names'], 
+        viz_data['dominant_color']
+    )
+    
+    print(f"  Dominant direction 3D: {len(visualizations['dominant_direction_3d']['xyz'])} points")
 
     # Summary statistics using pandas - use full dataset for statistics
     stats = calculate_pandas_stats(df)
@@ -1566,17 +1627,19 @@ def _generate_aggregate_html_template(
                     }},
                     aspectRatio: 1
                 }}
-            }});
-            console.log('Chart {metric_title} created successfully');
-        }}
-        
-        // Try to initialize immediately, or wait for DOM ready
-        if (document.readyState === 'loading') {{
-            document.addEventListener('DOMContentLoaded', initChart);
-        }} else {{
-            initChart();
-        }}
-    }})();
+                            }});
+                
+                // Chart created successfully
+                console.log('Chart {metric_title} created successfully');
+            }}
+            
+            // Try to initialize immediately, or wait for DOM ready
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initChart);
+            }} else {{
+                initChart();
+            }}
+        }})();
     """
 
     charts_js += lab_scatter('global_color_lab', 'Global Color', 'globalLabAbChart', 'globalLabAbBg')
@@ -1657,6 +1720,78 @@ def _generate_aggregate_html_template(
     charts_js += create_3d_rgb_plot('dc_color_3d', 'L=0 Color (DC Term)', 'dcRgb3dChart')
     charts_js += create_3d_rgb_plot('dominant_color_3d', 'Dominant Color', 'dominantRgb3dChart')
 
+    # ------------------ 3D Direction scatter plot ------------------
+    def create_3d_direction_plot(metric_key: str, metric_title: str, chart_id: str) -> str:
+        viz = visualizations[metric_key]
+        if not viz['xyz'] or len(viz['xyz']) == 0:
+            return f"""
+            // No data for {metric_title} 3D direction plot
+            document.addEventListener('DOMContentLoaded', function() {{
+                document.getElementById('{chart_id}').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;">No data available</div>';
+            }});
+            """
+        
+        # Prepare data for Plotly
+        x_vals = [point[0] for point in viz['xyz']]
+        y_vals = [point[1] for point in viz['xyz']]
+        z_vals = [point[2] for point in viz['xyz']]
+        
+        return f"""
+        document.addEventListener('DOMContentLoaded', function() {{
+            var trace = {{
+                x: {to_js(x_vals)},
+                y: {to_js(y_vals)},
+                z: {to_js(z_vals)},
+                mode: 'markers',
+                marker: {{
+                    size: 8,
+                    color: {to_js(viz['colors'])},
+                    opacity: 0.8,
+                    line: {{
+                        color: '#000',
+                        width: 1
+                    }}
+                }},
+                type: 'scatter3d',
+                text: {to_js(viz['names'])},
+                hovertemplate: '<b>%{{text}}</b><br>' +
+                              'X: %{{x:.3f}}<br>' +
+                              'Y: %{{y:.3f}}<br>' +
+                              'Z: %{{z:.3f}}<br>' +
+                              '<extra></extra>'
+            }};
+            
+            var layout = {{
+                title: {{
+                    font: {{ size: 14, color: '#000' }}
+                }},
+                scene: {{
+                    xaxis: {{ title: 'X Direction', range: [-1, 1], gridcolor: '#ddd' }},
+                    yaxis: {{ title: 'Y Direction', range: [-1, 1], gridcolor: '#ddd' }},
+                    zaxis: {{ title: 'Z Direction', range: [-1, 1], gridcolor: '#ddd' }},
+                    bgcolor: '#f9f9f9',
+                    camera: {{
+                        eye: {{ x: 1.5, y: 1.5, z: 1.5 }}
+                    }}
+                }},
+                margin: {{ l: 0, r: 0, t: 30, b: 0 }},
+                paper_bgcolor: '#f9f9f9',
+                plot_bgcolor: '#f9f9f9'
+            }};
+            
+            var config = {{
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['pan2d', 'select2d', 'lasso2d', 'autoScale2d'],
+                displaylogo: false,
+                responsive: true
+            }};
+            
+            Plotly.newPlot('{chart_id}', [trace], layout, config);
+        }});
+        """
+
+    charts_js += create_3d_direction_plot('dominant_direction_3d', 'Dominant Direction', 'dominantDirection3dChart')
+
     # ------------------ JS helpers for LAB background rendering ------------------
     charts_js += """
     // --- CIELAB helpers (D65) for drawing the a*b* background ---
@@ -1734,11 +1869,42 @@ def _generate_aggregate_html_template(
         });
     }
 
-    // Initialize backgrounds when page loads
+    // Initialize backgrounds and search when page loads
     document.addEventListener('DOMContentLoaded', function() {
         console.log('DOM loaded, initializing LAB backgrounds...');
         updateLabBackgrounds(currentLabL);
+        initializeHDRISearch();
     });
+
+    // HDRI Search functionality
+    function initializeHDRISearch() {
+        const searchInput = document.getElementById('hdriSearch');
+        const linksContainer = document.getElementById('individualLinksContainer');
+        const allLinks = linksContainer.querySelectorAll('.individual-link');
+
+        searchInput.addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase().trim();
+
+            allLinks.forEach(link => {
+                const hdriName = link.getAttribute('data-hdri-name').toLowerCase();
+                if (hdriName.includes(searchTerm)) {
+                    link.style.display = 'inline-block';
+                } else {
+                    link.style.display = 'none';
+                }
+            });
+        });
+
+        // Clear search on Escape key
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                allLinks.forEach(link => {
+                    link.style.display = 'inline-block';
+                });
+            }
+        });
+    }
     """
 
     # ------------------ Stats tables ------------------
@@ -1825,6 +1991,12 @@ def _generate_aggregate_html_template(
     .rgb3d-chart-container {{ position:relative; width:400px; height:400px; margin:0 auto; border:1px solid #ccc; background:#f9f9f9; }}
     .rgb3d-chart-container h4 {{ color:#000; margin:0 0 10px 0; font-size:1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; font-weight:bold; text-align:center; }}
 
+    /* 3D Direction plot styles */
+    .direction3d-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+    .direction3d-container {{ display:flex; justify-content:center; align-items:center; }}
+    .direction3d-chart-container {{ position:relative; width:600px; height:500px; margin:0 auto; border:1px solid #ccc; background:#f9f9f9; }}
+    .direction3d-chart-container h4 {{ color:#000; margin:0 0 10px 0; font-size:1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; font-weight:bold; text-align:center; }}
+
     .stats-table {{ margin-bottom:20px; background:#f8f8f8; padding:10px; border:1px inset #c0c0c0; }}
     .stats-table h4 {{ color:#000; margin:0 0 10px 0; font-size:1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; font-weight:bold; }}
     .stats-table table {{ width:100%; border-collapse:collapse; font-size:0.9rem; }}
@@ -1849,6 +2021,23 @@ def _generate_aggregate_html_template(
     .individual-link:hover {{ background:#e0e0e0; }}
     .individual-link:active {{ background:#d0d0d0; }}
 
+    /* Search functionality styles */
+    .search-container input {{
+        font-size: 14px;
+        border-radius: 0;
+        outline: none;
+    }}
+    .search-container input:focus {{
+        border: 2px inset #808080;
+    }}
+    .individual-links {{
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid #c0c0c0;
+        padding: 8px;
+        background: #f8f8f8;
+    }}
+
     .overview-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; }}
     .overview-stats {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px; margin-top:10px; }}
     .overview-item {{ background:#f0f0f0; padding:10px; border:1px inset #c0c0c0; text-align:center; }}
@@ -1872,8 +2061,11 @@ def _generate_aggregate_html_template(
 
     <div class=\"navigation-section\">
         <h2>Individual Reports</h2>
-        <div class=\"individual-links\">
-            {', '.join([f'<a href="{name}/{name}_report.html" class="individual-link">{name}</a>' for name in hdri_names])}
+        <div class=\"search-container\" style=\"margin-bottom: 15px;\">
+            <input type=\"text\" id=\"hdriSearch\" placeholder=\"Search HDRIs...\" style=\"width: 100%; padding: 8px; font-family: 'Courier New', monospace; border: 2px inset #c0c0c0; background: #ffffff;\">
+        </div>
+        <div class=\"individual-links\" id=\"individualLinksContainer\">
+            {''.join([f'<a href="{name}/{name}_report.html" class="individual-link" data-hdri-name="{name}">{name}</a>' for name in hdri_names])}
         </div>
     </div>
 
@@ -1898,6 +2090,7 @@ def _generate_aggregate_html_template(
 
     <div class=\"cielab-section\">
         <h2>Perceptual Color Maps (CIELAB)</h2>
+
         <div class=\"lab-controls\">
             <label for=\"labLevel\">L* slice:</label>
             <input id=\"labLevel\" type=\"range\" min=\"0\" max=\"100\" value=\"65\" oninput=\"document.getElementById('labLevelVal').textContent=this.value; updateLabBackgrounds(+this.value);\" />
@@ -1934,6 +2127,17 @@ def _generate_aggregate_html_template(
             <div class=\"rgb3d-chart-container\">
                 <h4>Dominant Color</h4>
                 <div id=\"dominantRgb3dChart\" style=\"width:100%; height:350px;\"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class=\"direction3d-section\">
+        <h2>3D Dominant Direction Analysis</h2>
+        <p style=\"text-align:left; margin-bottom:15px; color:#666; font-size:0.9rem;\">3D visualization of dominant lighting directions as unit vectors. Each point represents the primary direction of illumination for an HDRI, with colors showing the actual dominant color.</p>
+        <div class=\"direction3d-container\">
+            <div class=\"direction3d-chart-container\">
+                <h4>Dominant Direction Vectors</h4>
+                <div id=\"dominantDirection3dChart\" style=\"width:100%; height:450px;\"></div>
             </div>
         </div>
     </div>

@@ -120,8 +120,6 @@ Future Directions:
         Deep Parametric Indoor Lighting Estimation
 
 
-1. create common report dataclass and html viewer.
-2. reorganize the code base structure so it's easier for analysis.
-4. demarcate new vs prior analysis.
-5. Download source code and put here for reference for .js
+4. Demarcate new vs prior analysis.
+1. Try to understand color, temperature, and direction.
 """
