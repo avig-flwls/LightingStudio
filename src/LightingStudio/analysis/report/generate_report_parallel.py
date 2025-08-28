@@ -45,6 +45,8 @@ OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 #
 # Process all HDRI files in a folder with parallel processing (auto-detects CPU cores):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k_small" --n_samples 1024 --l_max 3 --png-only
+
 #
 # Process with specific number of parallel processes:
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 4
@@ -52,6 +54,8 @@ OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 # Process sequentially (single-threaded):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 1
 
+# Only run analysis on the following HDRIs:
+# python -m src.LightingStudio.analysis.report.aggregate_statistics  "C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments\dainty-flounder"
 
 def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png_only, device_str="cuda"):
     """

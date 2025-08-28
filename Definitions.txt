@@ -107,6 +107,7 @@ References:
 [14] https://stackoverflow.com/a/1847112
 [15] Acquiring the Reflectance Field of a Human Face Debevec et. al.
 [16] Inverse Tone Mapping Banterle et. al.
+[17] An Analytic Model for Full Spectral Sky-Dome Radiance by Hosek et. al.
 
 
 Future Directions:
