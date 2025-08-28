@@ -1045,6 +1045,33 @@ def create_lab_scatter_data(rgb_values: List[List[float]], hdri_names: List[str]
         return {'ab': [], 'L': [], 'colors': [], 'names': []}
 
 
+def create_3d_rgb_scatter_data(rgb_values: List[List[float]], hdri_names: List[str]) -> Dict:
+    """Create 3D scatter plot data for RGB values as 3D coordinates."""
+    if not rgb_values:
+        return {'xyz': [], 'colors': [], 'names': []}
+
+    try:
+        # Normalize RGB values to 0-1 range for better 3D visualization
+        rgb_array = np.array(rgb_values)
+        rgb_normalized = rgb_array / 255.0
+        
+        # Create 3D coordinates where R=x, G=y, B=z
+        xyz_coords = rgb_normalized.tolist()
+        
+        # Use the original RGB values as colors for the points
+        def rgb_to_hex(rgb):
+            r, g, b = [int(np.clip(c, 0, 255)) for c in rgb]
+            return f"rgb({r}, {g}, {b})"
+
+        colors = [rgb_to_hex(rgb) for rgb in rgb_values]
+        names = [hdri_names[i] if i < len(hdri_names) else f"HDRI_{i}" for i in range(len(rgb_values))]
+
+        return {'xyz': xyz_coords, 'colors': colors, 'names': names}
+    except Exception as e:
+        print(f"Error in create_3d_rgb_scatter_data: {e}")
+        return {'xyz': [], 'colors': [], 'names': []}
+
+
 # ==============================
 # Main HTML generator (extended with LAB views)
 # ==============================
@@ -1271,6 +1298,17 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
     print(f"  Global color LAB: {len(visualizations['global_color_lab']['ab'])} points")
     print(f"  DC color LAB: {len(visualizations['dc_color_lab']['ab'])} points")
     print(f"  Dominant color LAB: {len(visualizations['dominant_color_lab']['ab'])} points")
+
+    # 3D RGB scatter plots - use sampled data
+    print(f"  Creating 3D RGB visualizations...")
+    
+    visualizations['global_color_3d'] = create_3d_rgb_scatter_data(viz_data['global_color'], viz_data['hdri_names'])
+    visualizations['dc_color_3d'] = create_3d_rgb_scatter_data(viz_data['dc_color'], viz_data['hdri_names'])
+    visualizations['dominant_color_3d'] = create_3d_rgb_scatter_data(viz_data['dominant_color'], viz_data['hdri_names'])
+    
+    print(f"  Global color 3D: {len(visualizations['global_color_3d']['xyz'])} points")
+    print(f"  DC color 3D: {len(visualizations['dc_color_3d']['xyz'])} points")
+    print(f"  Dominant color 3D: {len(visualizations['dominant_color_3d']['xyz'])} points")
 
     # Summary statistics using pandas - use full dataset for statistics
     stats = calculate_pandas_stats(df)
@@ -1545,6 +1583,80 @@ def _generate_aggregate_html_template(
     charts_js += lab_scatter('dc_color_lab', 'L=0 Color (DC Term)', 'dcLabAbChart', 'dcLabAbBg')
     charts_js += lab_scatter('dominant_color_lab', 'Dominant Color', 'dominantLabAbChart', 'dominantLabAbBg')
 
+    # ------------------ 3D RGB scatter plots ------------------
+    def create_3d_rgb_plot(metric_key: str, metric_title: str, chart_id: str) -> str:
+        viz = visualizations[metric_key]
+        if not viz['xyz'] or len(viz['xyz']) == 0:
+            return f"""
+            // No data for {metric_title} 3D plot
+            document.addEventListener('DOMContentLoaded', function() {{
+                document.getElementById('{chart_id}').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;">No data available</div>';
+            }});
+            """
+        
+        # Prepare data for Plotly
+        x_vals = [point[0] for point in viz['xyz']]
+        y_vals = [point[1] for point in viz['xyz']]
+        z_vals = [point[2] for point in viz['xyz']]
+        
+        return f"""
+        document.addEventListener('DOMContentLoaded', function() {{
+            var trace = {{
+                x: {to_js(x_vals)},
+                y: {to_js(y_vals)},
+                z: {to_js(z_vals)},
+                mode: 'markers',
+                marker: {{
+                    size: 8,
+                    color: {to_js(viz['colors'])},
+                    opacity: 0.8,
+                    line: {{
+                        color: '#000',
+                        width: 1
+                    }}
+                }},
+                type: 'scatter3d',
+                text: {to_js(viz['names'])},
+                hovertemplate: '<b>%{{text}}</b><br>' +
+                              'R: %{{x:.3f}}<br>' +
+                              'G: %{{y:.3f}}<br>' +
+                              'B: %{{z:.3f}}<br>' +
+                              '<extra></extra>'
+            }};
+            
+            var layout = {{
+                title: {{
+                    font: {{ size: 14, color: '#000' }}
+                }},
+                scene: {{
+                    xaxis: {{ title: 'Red (0-1)', range: [0, 1], gridcolor: '#ddd' }},
+                    yaxis: {{ title: 'Green (0-1)', range: [0, 1], gridcolor: '#ddd' }},
+                    zaxis: {{ title: 'Blue (0-1)', range: [0, 1], gridcolor: '#ddd' }},
+                    bgcolor: '#f9f9f9',
+                    camera: {{
+                        eye: {{ x: 1.5, y: 1.5, z: 1.5 }}
+                    }}
+                }},
+                margin: {{ l: 0, r: 0, t: 30, b: 0 }},
+                paper_bgcolor: '#f9f9f9',
+                plot_bgcolor: '#f9f9f9'
+            }};
+            
+            var config = {{
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['pan2d', 'select2d', 'lasso2d', 'autoScale2d'],
+                displaylogo: false,
+                responsive: true
+            }};
+            
+            Plotly.newPlot('{chart_id}', [trace], layout, config);
+        }});
+        """
+
+    charts_js += create_3d_rgb_plot('global_color_3d', 'Global Color', 'globalRgb3dChart')
+    charts_js += create_3d_rgb_plot('dc_color_3d', 'L=0 Color (DC Term)', 'dcRgb3dChart')
+    charts_js += create_3d_rgb_plot('dominant_color_3d', 'Dominant Color', 'dominantRgb3dChart')
+
     # ------------------ JS helpers for LAB background rendering ------------------
     charts_js += """
     // --- CIELAB helpers (D65) for drawing the a*b* background ---
@@ -1673,6 +1785,7 @@ def _generate_aggregate_html_template(
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
 <title>Aggregate Statistics — {experiment_name}</title>
 <script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>
+<script src=\"https://cdn.plot.ly/plotly-latest.min.js\"></script>
 <style>
     * {{ margin:0; padding:0; box-sizing:border-box; }}
     body {{ font-family: 'Courier New', monospace; line-height:1.4; color:#000; background:#c0c0c0; }}
@@ -1705,6 +1818,12 @@ def _generate_aggregate_html_template(
 
     .lab-controls {{ display:flex; gap:10px; align-items:center; margin-bottom:10px; }}
     .lab-controls label {{ font-weight:bold; }}
+
+    /* 3D RGB plot styles */
+    .rgb3d-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+    .rgb3d-grid {{ display:grid; grid-template-columns:repeat(3, 1fr); gap:20px; align-items:center; justify-items:center; }}
+    .rgb3d-chart-container {{ position:relative; width:400px; height:400px; margin:0 auto; border:1px solid #ccc; background:#f9f9f9; }}
+    .rgb3d-chart-container h4 {{ color:#000; margin:0 0 10px 0; font-size:1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; font-weight:bold; text-align:center; }}
 
     .stats-table {{ margin-bottom:20px; background:#f8f8f8; padding:10px; border:1px inset #c0c0c0; }}
     .stats-table h4 {{ color:#000; margin:0 0 10px 0; font-size:1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; font-weight:bold; }}
@@ -1796,6 +1915,25 @@ def _generate_aggregate_html_template(
             <div class=\"lab-chart-container\" style=\"width:350px;height:350px;\">
                 <canvas id=\"dominantLabAbBg\"></canvas>
                 <canvas id=\"dominantLabAbChart\"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class=\"rgb3d-section\">
+        <h2>3D RGB Color Space</h2>
+        <p style=\"text-align:center; margin-bottom:15px; color:#666; font-size:0.9rem;\">Interactive 3D plots showing RGB values as coordinates. Click and drag to rotate, scroll to zoom.</p>
+        <div class=\"rgb3d-grid\">
+            <div class=\"rgb3d-chart-container\">
+                <h4>Global Color</h4>
+                <div id=\"globalRgb3dChart\" style=\"width:100%; height:350px;\"></div>
+            </div>
+            <div class=\"rgb3d-chart-container\">
+                <h4>L=0 Color (DC Term)</h4>
+                <div id=\"dcRgb3dChart\" style=\"width:100%; height:350px;\"></div>
+            </div>
+            <div class=\"rgb3d-chart-container\">
+                <h4>Dominant Color</h4>
+                <div id=\"dominantRgb3dChart\" style=\"width:100%; height:350px;\"></div>
             </div>
         </div>
     </div>
