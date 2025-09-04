@@ -88,6 +88,8 @@ start                          end
         end             start
 -------------------------------------- Surface
 
+Equirectangular vs Angular Skymap visual definition.
+https://chunky-dev.github.io/docs/user_guides/skymaps/#skymaps
 
 References:
 
@@ -107,7 +109,14 @@ References:
 [14] https://stackoverflow.com/a/1847112
 [15] Acquiring the Reflectance Field of a Human Face Debevec et. al.
 [16] Inverse Tone Mapping Banterle et. al.
-[17] An Analytic Model for Full Spectral Sky-Dome Radiance by Hosek et. al.
+
+# Skymodels
+[17] A Practical Analytic Model for Daylight by Preetham et. al.
+[18] An Analytic Model for Full Spectral Sky-Dome Radiance by Hosek et. al.
+[19] Preetham shader toy: https://www.shadertoy.com/view/tdXfD7
+[20] Hosek shader toy: https://www.shadertoy.com/view/wslfD7
+[21] Chunky Preetham code: https://github.com/chunky-dev/chunky/blob/235ce55da9a53a3a1e78204eb78447cf3ae19037/chunky/src/java/se/llbit/chunky/renderer/scene/sky/PreethamSky.java#L26
+[22] Sun-Sky code cSunSkyPreetham and cSunSkyHosek code: https://github.com/andrewwillmott/sun-sky/blob/master/SunSky.cpp#L724
 
 
 Future Directions:
