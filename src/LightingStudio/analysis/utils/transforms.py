@@ -51,8 +51,8 @@ def convert_theta(theta:torch.Tensor) -> torch.Tensor:
 
     The polar angle θ is measured between the z-axis and the radial line r. aka Colatitude.
 
-    : params theta: (H, W)
-    : returns new_theta: (H, W)
+    : params theta: (...)
+    : returns new_theta: (...)
 
     Source:
     [11] definition

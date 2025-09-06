@@ -289,5 +289,5 @@ if __name__ == "__main__":
     sun_dir = np.array([np.cos(elev)*np.sin(azim), np.sin(elev), np.cos(elev)*np.cos(azim)])
     img = preetham_sky_equirect(H, W, T, sun_dir)  # (H,W,3) linear sRGB
 
-    write_exr(torch.from_numpy(img), "preetham_sky.exr")
+    write_exr(torch.from_numpy(img), "preetham_sky_2.exr")
 
