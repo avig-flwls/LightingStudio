@@ -1,4 +1,7 @@
 import torch
+from pathlib import Path
+from coolname import generate_slug
+from tqdm import tqdm
 
 from src.LightingStudio.analysis.utils.io import write_exr
 from src.LightingStudio.analysis.utils.transforms import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map, spherical_to_cartesian
@@ -222,26 +225,125 @@ def generate_preetham_sky(H: int, W: int, turbidity: float, sun_dir: torch.Tenso
 
     return tonemap_RGB 
 
+def get_sm_rad_from_long_deg(lon_deg: torch.Tensor) -> torch.Tensor:
+    """
+    Get standard meridian radians from longitude degrees
+    """
+    # ensure floating dtype for trig/deg2rad
+    lon = lon_deg.to(dtype=torch.get_default_dtype())
+    sm_deg = 15.0 * torch.round(lon / 15.0)
+    return torch.deg2rad(sm_deg)
+
+
+def spherical_coordinates_from_sun_position(
+    J: torch.Tensor,          # Julian day of year, 1..365 (or 366), radians-safe torch scalar/tensor
+    ts: torch.Tensor,         # local standard time, decimal hours [0..24)
+    lat: torch.Tensor,        # site latitude, radians (+N)
+    lon: torch.Tensor,        # site longitude, radians (+E)
+    SM: torch.Tensor,         # standard meridian for time zone, radians (+E). e.g., UTC-8 -> SM = deg2rad(-120)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Spherical coordinates from sun position
+
+    : params J: torch.Tensor, Julian day of year, 1..365 (or 366), radians-safe torch scalar/tensor
+    : params ts: torch.Tensor, local standard time, decimal hours [0..24)
+    : params lat: torch.Tensor, site latitude, radians (+N)
+    : params lon: torch.Tensor, site longitude, radians (+E)
+    : params SM: torch.Tensor, standard meridian for time zone, radians (+E). e.g., UTC-8 -> SM = deg2rad(-120)
+    
+    : returns t: torch.Tensor, solar time (decimal hours)
+    : returns theta_s: torch.Tensor, solar zenith angle (radians)  [0 .. pi], <= pi/2 when sun is above horizon
+    : returns phi_s: torch.Tensor, solar azimuth (radians), positive to the WEST of South (per paper)
+
+    Source:
+    [17] Appendix A.6
+    """
+
+    # --- Solar time t (decimal hours) -----------------------------------------
+    # t = ts + 0.170 * sin(4π(J - 80)/373) - 0.129 * sin(2π(J - 8)/355) + 12*(SM - lon)/π
+    two_pi = torch.tensor(2.0 * torch.pi)
+    pi     = torch.tensor(torch.pi)
+
+    term1 = 0.170 * torch.sin((4.0 * pi) * (J - 80.0) / 373.0)
+    term2 = 0.129 * torch.sin((2.0 * pi) * (J - 8.0)  / 355.0)
+    t = ts + term1 - term2 + 12.0 * (SM - lon) / pi  # solar time (hours) 
+
+    # --- Solar declination δ (radians) -----------------------------------------
+    # δ = 0.4093 * sin(2π(J - 81)/368)
+    delta = 0.4093 * torch.sin(two_pi * (J - 81.0) / 368.0)  
+
+    # --- Hour angle H (radians) using solar time t -----------------------------
+    # Standard: H = π/12 * (t - 12). (Solar noon -> H=0)
+    # H = (pi / 12.0) * (t - 12.0)
+    H = (pi * t / 12.0) 
+
+    # --- Solar zenith θ_s and azimuth φ_s -------------------------------------
+    # PAPER’s forms (A.6):
+    # θ_s = pi/2 - arcsin( sin(lat) sin(δ) + cos(lat) cos(δ) cos(H) )
+    # φ_s = atan2( -cos(δ) sin(H),  cos(lat) sin(δ) - sin(lat) cos(δ) cos(H) )
+    # (This atan2 yields azimuth measured from SOUTH, positive toward WEST, matching the paper’s convention.)
+
+    theta_s = torch.pi/2.0 - torch.asin(torch.sin(lat) * torch.sin(delta) + torch.cos(lat) * torch.cos(delta) * torch.cos(H))
+    phi_s = torch.atan2(-torch.cos(delta) * torch.sin(H), torch.cos(lat) * torch.sin(delta) - torch.sin(lat) * torch.cos(delta) * torch.cos(H))
+
+    return t, theta_s, phi_s
+
+
+
+
+OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
+
+
 # -----------------------------
 # Example
 # -----------------------------
 if __name__ == "__main__":
     H, W = 256, 512
     T = 2.3
-    
-    elev = torch.tensor([(7/8)*torch.pi/2.0])
-    azim = torch.tensor([-(7/8)*torch.pi])
 
-    print("elev: ", elev)
-    print("azim: ", azim)
+    # Original Direct    
+    # elev = torch.tensor([(7/8)*torch.pi/2.0])
+    # azim = torch.tensor([-(7/8)*torch.pi])
 
-    spherical_coordinates = torch.stack([elev, azim], dim=-1)
-    print(f"spherical_coordinates: {spherical_coordinates}, with shape: {spherical_coordinates.shape}")
+    # print("elev: ", elev)
+    # print("azim: ", azim)
 
-    sun_dir = spherical_to_cartesian(spherical_coordinates)
-    print("sun_dir: ", sun_dir)
+    # spherical_coordinates = torch.stack([elev, azim], dim=-1)
+    # print(f"spherical_coordinates: {spherical_coordinates}, with shape: {spherical_coordinates.shape}")
 
-    img = generate_preetham_sky(H, W, T, sun_dir)  # (H,W,3) linear sRGB
+    # sun_dir = spherical_to_cartesian(spherical_coordinates)
+    # print("sun_dir: ", sun_dir)
 
-    write_exr(img, "preetham_sky_new.exr")
+    # Create random directory for output
+    experiment_name = generate_slug(2)
+    output_dir = Path(OUTPUT_DIR) / experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir}")
 
+    lon_deg = torch.tensor([19.74])
+    lat_deg = torch.tensor([-155.98])
+    SM = get_sm_rad_from_long_deg(lon_deg)
+
+    count = 0
+    for J in tqdm(range(125, 175), desc="Generating Preetham sky"):
+        for ts in range(24):
+            t, theta_s, phi_s = spherical_coordinates_from_sun_position(J, ts, torch.deg2rad(lat_deg), torch.deg2rad(lon_deg), SM)
+
+            elev = theta_s
+            azim = phi_s
+        
+            # print("elev: ", elev)
+            # print("azim: ", azim)
+
+            spherical_coordinates = torch.stack([elev, azim], dim=-1)
+            # print(f"spherical_coordinates: {spherical_coordinates}, with shape: {spherical_coordinates.shape}")
+
+            sun_dir = spherical_to_cartesian(spherical_coordinates)
+            # print("sun_dir: ", sun_dir)
+
+            img = generate_preetham_sky(H, W, T, sun_dir)  # (H,W,3) linear sRGB
+        
+            # Write EXR to the random directory
+            output_path = output_dir / f"preetham_hawaii_{count}.exr"
+            write_exr(img, str(output_path))
+            count += 1
