@@ -834,7 +834,7 @@ background gamut slice at adjustable L*.
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 import colorsys
@@ -1176,6 +1176,1213 @@ def create_dataframe_from_metrics(metrics_data: Dict[str, List]) -> pd.DataFrame
     return pd.DataFrame(data_dict)
 
 
+def create_filter_configuration_for_existing(df: pd.DataFrame, stats: Dict) -> Dict[str, Any]:
+    """Create filter configuration for existing aggregate statistics interface."""
+    
+    filters = {}
+    
+    # Global intensity filter (primary request)
+    if 'global_intensity' in stats:
+        intensity_stats = stats['global_intensity']
+        filters['global_intensity'] = {
+            'label': 'Global Intensity',
+            'type': 'range',
+            'min': float(intensity_stats['min']),
+            'max': float(intensity_stats['max']),
+            'default_min': float(intensity_stats['q25']),
+            'default_max': float(intensity_stats['q75']),
+            'step': (float(intensity_stats['max']) - float(intensity_stats['min'])) / 100,
+            'column': 'global_intensity'
+        }
+    
+    # Brightness filters for different color metrics
+    color_metrics = ['global', 'dc', 'dominant', 'area']
+    for metric in color_metrics:
+        brightness_key = f'{metric}_brightness'
+        if brightness_key in stats:
+            brightness_stats = stats[brightness_key]
+            filters[f'{metric}_brightness'] = {
+                'label': f'{metric.title()} Brightness',
+                'type': 'range',
+                'min': float(brightness_stats['min']),
+                'max': float(brightness_stats['max']),
+                'default_min': float(brightness_stats['min']),
+                'default_max': float(brightness_stats['max']),
+                'step': (float(brightness_stats['max']) - float(brightness_stats['min'])) / 100,
+                'column': f'{metric}_brightness'  # This will be calculated dynamically
+            }
+    
+    # Individual RGB channel filters for global color
+    for channel in ['r', 'g', 'b']:
+        col_name = f'global_{channel}'
+        if col_name in df.columns:
+            channel_min = float(df[col_name].min())
+            channel_max = float(df[col_name].max())
+            filters[f'global_{channel}'] = {
+                'label': f'Global {channel.upper()} Channel',
+                'type': 'range',
+                'min': channel_min,
+                'max': channel_max,
+                'default_min': channel_min,
+                'default_max': channel_max,
+                'step': (channel_max - channel_min) / 100,
+                'column': col_name
+            }
+    
+    return filters
+
+
+def _generate_filter_controls_html_for_existing(filter_config: Dict) -> str:
+    """Generate HTML for dashboard-style filter controls."""
+    
+    if not filter_config:
+        return ""
+    
+    # Dashboard-style summary cards
+    html = '''
+    <div class="dashboard-summary">
+        <h2>📊 HDRI Analytics Dashboard</h2>
+        <div class="summary-cards">
+            <div class="summary-card">
+                <div class="card-icon">🎯</div>
+                <div class="card-content">
+                    <div class="card-value" id="filtered-count-dashboard">0</div>
+                    <div class="card-label">Filtered HDRIs</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="card-icon">📈</div>
+                <div class="card-content">
+                    <div class="card-value" id="avg-intensity-dashboard">—</div>
+                    <div class="card-label">Avg Intensity</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="card-icon">⚡</div>
+                <div class="card-content">
+                    <div class="card-value" id="filter-efficiency-dashboard">100%</div>
+                    <div class="card-label">Data Shown</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    '''
+    
+    return html
+
+
+def _generate_range_filter_html_for_existing(filter_key: str, config: Dict) -> str:
+    """Generate HTML for a single range filter in existing interface."""
+    
+    return f'''
+    <div style="margin-bottom:15px;">
+        <label for="{filter_key}" style="display:block; font-weight:bold; margin-bottom:5px;">{config['label']}</label>
+        <div style="display:flex; align-items:center; gap:5px; margin-bottom:5px;">
+            <input type="range" 
+                   id="{filter_key}_min" 
+                   style="flex:1;"
+                   min="{config['min']}" 
+                   max="{config['max']}" 
+                   step="{config['step']}" 
+                   value="{config['default_min']}"
+                   oninput="updateFilterExisting('{filter_key}')">
+            <input type="range" 
+                   id="{filter_key}_max" 
+                   style="flex:1;"
+                   min="{config['min']}" 
+                   max="{config['max']}" 
+                   step="{config['step']}" 
+                   value="{config['default_max']}"
+                   oninput="updateFilterExisting('{filter_key}')">
+        </div>
+        <div style="display:flex; gap:5px; align-items:center; font-size:0.8rem;">
+            Min: <input type="number" id="{filter_key}_min_val" value="{config['default_min']:.3f}" 
+                       step="{config['step']}" style="width:70px; padding:2px; font-size:0.8rem;"
+                       onchange="updateFilterFromInputExisting('{filter_key}', 'min')">
+            Max: <input type="number" id="{filter_key}_max_val" value="{config['default_max']:.3f}"
+                       step="{config['step']}" style="width:70px; padding:2px; font-size:0.8rem;"
+                       onchange="updateFilterFromInputExisting('{filter_key}', 'max')">
+        </div>
+    </div>
+    '''
+
+
+def _generate_filter_javascript_for_existing(df_json: str, filter_config: Dict, hdri_names: List[str]) -> str:
+    """Generate JavaScript code for filtering functionality in existing interface."""
+    
+    def to_js(x):
+        return str(x).replace("'", '"')
+    
+    return f'''
+// Filtering system for existing aggregate statistics
+let allDataExisting = {df_json};
+let filteredDataExisting = [...allDataExisting];
+let originalChartsExisting = {{}};
+
+// Filter configuration
+const filterConfigExisting = {to_js(filter_config)};
+
+// Initialize filtering system
+// Brush selection state
+let brushSelection = null;
+let isDragging = false;
+let chartsInitialized = false;
+let plotly3dReady = false;
+let intensityChart = null;
+
+// Debug flag to control logging
+const DEBUG = false;
+function dbg() {{
+    if (!DEBUG) return;
+    try {{ console.log.apply(console, arguments); }} catch (_) {{}}
+}}
+
+document.addEventListener('DOMContentLoaded', function() {{
+    
+    // Add calculated columns
+    allDataExisting.forEach(row => {{
+        row.global_brightness = (row.global_r + row.global_g + row.global_b) / 3;
+        row.dc_brightness = (row.dc_r + row.dc_g + row.dc_b) / 3;
+        row.dominant_brightness = (row.dominant_r + row.dominant_g + row.dominant_b) / 3;
+        row.area_brightness = (row.area_r + row.area_g + row.area_b) / 3;
+    }});
+    
+    // Calculate initial intensity range
+    const intensities = allDataExisting.map(row => row.global_intensity);
+    intensityRange.min = Math.min(...intensities);
+    intensityRange.max = Math.max(...intensities);
+    dbg(`Intensity range calculated: min=${{intensityRange.min}}, max=${{intensityRange.max}}, data points: ${{intensities.length}}`);
+    dbg(`Sample intensities: ${{intensities.slice(0, 5).map(v => v.toFixed(3)).join(', ')}}`);
+    
+    // Don't update dashboard on initial load - wait for charts to be ready
+    // updateDashboardSummary();
+    
+    // Initialize status text
+    const statusElement = document.getElementById('chart-status');
+    if (statusElement) {{
+        statusElement.textContent = `Showing all ${{allDataExisting.length}} HDRIs`;
+        statusElement.style.color = '#666';
+    }}
+    
+    // Set initial dashboard values without triggering updates
+    document.getElementById('filtered-count-dashboard').textContent = allDataExisting.length;
+    const avgIntensity = intensities.reduce((a, b) => a + b, 0) / intensities.length;
+    document.getElementById('avg-intensity-dashboard').textContent = avgIntensity.toFixed(2);
+    document.getElementById('filter-efficiency-dashboard').textContent = '100%';
+    
+    // Initialize brush selection after charts are ready
+    setTimeout(() => {{
+        chartsInitialized = true;
+        
+        // Debug: Check if charts exist
+        console.log('Checking charts after initialization:');
+        console.log('Global intensity chart:', allCharts.intensity ? 'exists' : 'missing');
+        console.log('Area intensity chart:', allCharts.areaIntensity ? 'exists' : 'missing');
+        console.log('LAB charts - global:', allCharts.labCharts.global ? 'exists' : 'missing');
+        console.log('LAB charts - dc:', allCharts.labCharts.dc ? 'exists' : 'missing');
+        console.log('LAB charts - dominant:', allCharts.labCharts.dominant ? 'exists' : 'missing');
+        
+        // Debug: Check data
+        if (allCharts.areaIntensity) {{
+            console.log('Area intensity datasets:', allCharts.areaIntensity.data.datasets.length);
+            allCharts.areaIntensity.data.datasets.forEach((ds, idx) => {{
+                console.log(`Dataset ${{idx}}: ${{ds.label}}, data points: ${{ds.data.length}}`);
+            }});
+        }}
+        
+        initializeBrushSelection();
+        
+        // Wait a bit more for 3D plots to be ready
+        setTimeout(() => {{
+            console.log('Checking 3D plots:');
+            const globalRgbDiv = document.getElementById('globalRgb3dChart');
+            const globalRgbReady = globalRgbDiv && globalRgbDiv._fullData;
+            console.log('Global RGB 3D:', globalRgbReady ? 'ready' : 'not ready');
+            
+            const dcRgbDiv = document.getElementById('dcRgb3dChart');
+            const dcRgbReady = dcRgbDiv && dcRgbDiv._fullData;
+            console.log('DC RGB 3D:', dcRgbReady ? 'ready' : 'not ready');
+            
+            const dominantRgbDiv = document.getElementById('dominantRgb3dChart');
+            const dominantRgbReady = dominantRgbDiv && dominantRgbDiv._fullData;
+            console.log('Dominant RGB 3D:', dominantRgbReady ? 'ready' : 'not ready');
+            
+            const directionDiv = document.getElementById('dominantDirection3dChart');
+            const directionReady = directionDiv && directionDiv._fullData;
+            console.log('Direction 3D:', directionReady ? 'ready' : 'not ready');
+            
+            // Check if all 3D plots are ready
+            if (globalRgbReady && dcRgbReady && dominantRgbReady && directionReady) {{
+                plotly3dReady = true;
+                console.log('All 3D plots are ready!');
+            }} else {{
+                // Try again in a bit
+                setTimeout(() => {{
+                    plotly3dReady = true;
+                    console.log('Forcing 3D plots ready after additional wait');
+                }}, 2000);
+            }}
+        }}, 2000);
+    }}, 1500);  // Increased delay to ensure all charts are ready
+}});
+
+function updateDashboardSummary() {{
+    const filteredCount = filteredDataExisting.length;
+    const totalCount = allDataExisting.length;
+    
+    // Update dashboard cards
+    document.getElementById('filtered-count-dashboard').textContent = filteredCount;
+    
+    if (filteredCount > 0) {{
+        const intensities = filteredDataExisting.map(row => row.global_intensity);
+        const avgIntensity = intensities.reduce((a, b) => a + b, 0) / intensities.length;
+        
+        // Calculate color variance
+        document.getElementById('avg-intensity-dashboard').textContent = avgIntensity.toFixed(2);
+    }} else {{
+        document.getElementById('avg-intensity-dashboard').textContent = '—';
+    }}
+    
+    const efficiency = totalCount > 0 ? Math.round((filteredCount / totalCount) * 100) : 100;
+    document.getElementById('filter-efficiency-dashboard').textContent = `${{efficiency}}%`;
+}}
+
+function initializeBrushSelection() {{
+    const brushOverlay = document.getElementById('intensity-brush-overlay');
+    if (!brushOverlay) {{
+        console.error('Brush overlay not found!');
+        return;
+    }}
+    
+    console.log('Brush overlay found, initializing events');
+    
+    let startX = 0;
+    let currentSelection = null;
+    let cachedOverlayRect = null;
+    let cachedCanvasRect = null;
+    let cachedChartArea = null;
+    
+    brushOverlay.addEventListener('mousedown', function(e) {{
+        console.log('Mouse down detected at:', e.offsetX);
+        isDragging = true;
+        // Use clientX relative to the overlay's left for stability
+        const overlayRectAtStart = brushOverlay.getBoundingClientRect();
+        startX = Math.max(0, Math.min(overlayRectAtStart.width, e.clientX - overlayRectAtStart.left));
+        
+        // Cache coordinate system data at start of drag
+        const chart = window.Chart.getChart('globalIntensityChart');
+        if (chart && chart.canvas && chart.chartArea) {{
+            cachedOverlayRect = brushOverlay.getBoundingClientRect();
+            cachedCanvasRect = chart.canvas.getBoundingClientRect();
+            cachedChartArea = {{ ...chart.chartArea }}; // Copy the object
+            console.log('Cached coordinate system for drag operation');
+        }}
+        
+        // Clear existing selection
+        if (currentSelection) {{
+            currentSelection.remove();
+        }}
+        
+        // Create new selection
+        currentSelection = document.createElement('div');
+        currentSelection.className = 'brush-selection';
+        currentSelection.style.left = startX + 'px';
+        currentSelection.style.top = '0px';
+        currentSelection.style.width = '0px';
+        currentSelection.style.height = '100%';
+        brushOverlay.appendChild(currentSelection);
+        
+        e.preventDefault();
+    }});
+    
+    brushOverlay.addEventListener('mousemove', function(e) {{
+        if (!isDragging || !currentSelection || !cachedOverlayRect) return;
+        
+        // Use cached overlay rect instead of calling getBoundingClientRect repeatedly
+        // Use clientX relative to overlay for stable coordinates during drag
+        const currentX = Math.max(0, Math.min(cachedOverlayRect.width, e.clientX - cachedOverlayRect.left));
+        
+        // Simple validation - if coordinates seem invalid, skip this update
+        if (isNaN(currentX) || currentX < 0 || currentX > cachedOverlayRect.width + 100) {{
+            console.warn('Invalid mouse coordinates detected, skipping update:', currentX);
+            return;
+        }}
+        
+        const width = Math.abs(currentX - startX);
+        const left = Math.min(startX, currentX);
+        
+        // Only update if the change makes sense
+        if (width >= 0 && left >= 0 && left + width <= cachedOverlayRect.width + 10) {{
+            currentSelection.style.left = left + 'px';
+            currentSelection.style.width = width + 'px';
+        }}
+    }});
+    
+    brushOverlay.addEventListener('mouseup', function(e) {{
+        if (!isDragging || !currentSelection) return;
+        
+        // Clamp coordinates to overlay bounds
+        const overlayRect = cachedOverlayRect || brushOverlay.getBoundingClientRect();
+        const endX = Math.max(0, Math.min(overlayRect.width, e.clientX - overlayRect.left));
+        
+        console.log('Mouse up detected at:', endX, '(original:', e.offsetX, ')');
+        isDragging = false;
+        
+        // Apply brush selection as filter if selection is wide enough
+        if (Math.abs(endX - startX) > 5) {{
+            // Get the actual chart coordinates for precise mapping
+            const chart = window.Chart.getChart('globalIntensityChart');
+            if (chart && chart.chartArea && chart.canvas) {{
+                // Get canvas position relative to viewport
+                const canvasRect = chart.canvas.getBoundingClientRect();
+                const overlayRect = brushOverlay.getBoundingClientRect();
+                
+                // Calculate offset between overlay and canvas
+                const offsetX = overlayRect.left - canvasRect.left;
+                const offsetY = overlayRect.top - canvasRect.top;
+                
+                // Adjust mouse coordinates to be relative to canvas
+                const canvasStartX = startX - offsetX;
+                const canvasEndX = endX - offsetX;
+                
+                // Ensure proper ordering regardless of selection direction
+                const leftX = Math.min(canvasStartX, canvasEndX);
+                const rightX = Math.max(canvasStartX, canvasEndX);
+                
+                // Use actual chart area for precise coordinate mapping
+                const chartArea = chart.chartArea;
+                const chartLeft = chartArea.left;
+                const chartRight = chartArea.right;
+                const chartWidth = chartRight - chartLeft;
+                
+                // Map pixel positions to chart data coordinates
+                // Account for the fact that canvas pixel coordinates need to be scaled
+                const scale = chart.canvas.width / chart.canvas.offsetWidth;
+                const scaledLeftX = leftX * scale;
+                const scaledRightX = rightX * scale;
+                
+                // Map to ratios within the chart area
+                const leftRatio = Math.max(0, Math.min(1, (scaledLeftX - chartLeft) / chartWidth));
+                const rightRatio = Math.max(0, Math.min(1, (scaledRightX - chartLeft) / chartWidth));
+                
+                // Account for visual offset - the selection appears shifted right from the actual values
+                // So we need to shift our calculated values LEFT to compensate
+                const binCount = 20; // Same as in updateIntensityChartWithFilter
+                const barWidthRatio = 1.0 / binCount;
+                
+                // Shift left by approximately one bar width to align visual selection with data
+                const offsetCorrection = barWidthRatio * 1.0; // Full bar width offset
+                
+                // Convert to intensity values with left shift to correct for visual offset
+                const minValue = intensityRange.min + Math.max(0, leftRatio - offsetCorrection) * (intensityRange.max - intensityRange.min);
+                const maxValue = intensityRange.min + Math.max(0, rightRatio - offsetCorrection) * (intensityRange.max - intensityRange.min);
+                
+                dbg(`Canvas rect: ${{canvasRect.left}}, ${{canvasRect.top}}`);
+                dbg(`Overlay rect: ${{overlayRect.left}}, ${{overlayRect.top}}`);
+                dbg(`Offset: ${{offsetX}}, ${{offsetY}}`);
+                dbg(`Canvas scale: ${{scale}} (canvas.width=${{chart.canvas.width}}, offsetWidth=${{chart.canvas.offsetWidth}})`);
+                dbg(`Original mouse: ${{startX}}-${{endX}}px`);
+                dbg(`Canvas-relative: ${{canvasStartX}}-${{canvasEndX}}px`);
+                dbg(`Scaled positions: ${{scaledLeftX}}-${{scaledRightX}}px`);
+                dbg(`Ordered selection: ${{leftX}}-${{rightX}}px`);
+                dbg(`Chart area: left=${{chartLeft}}, right=${{chartRight}}, width=${{chartWidth}}`);
+                dbg(`Ratios: ${{leftRatio.toFixed(3)}}-${{rightRatio.toFixed(3)}}`);
+                dbg(`Intensity range: ${{minValue.toFixed(3)}}-${{maxValue.toFixed(3)}}`);
+                
+                applyBrushFilter(minValue, maxValue);
+            }} else {{
+                dbg('Chart, chartArea, or canvas not available for coordinate mapping');
+            }}
+        }}
+        
+        brushSelection = {{ startX, endX }};
+    }});
+    
+    // Handle mouse leave - continue dragging but clamp coordinates
+    brushOverlay.addEventListener('mouseleave', function() {{
+        // Don't stop dragging, let mouseup handle it
+        // This prevents issues when mouse briefly leaves the overlay
+    }});
+    
+    // Also listen for document-level mouseup to catch releases outside overlay
+    document.addEventListener('mouseup', function(e) {{
+        if (isDragging && currentSelection) {{
+            // Calculate relative position to overlay
+            const overlayRect = cachedOverlayRect || brushOverlay.getBoundingClientRect();
+            const relativeX = e.clientX - overlayRect.left;
+            const endX = Math.max(0, Math.min(overlayRect.width, relativeX));
+            
+            dbg('Document mouse up detected at:', endX, '(client:', e.clientX, ')');
+            isDragging = false;
+            
+            // Apply brush selection if wide enough
+            if (Math.abs(endX - startX) > 5) {{
+                const chart = window.Chart.getChart('globalIntensityChart');
+                if (chart && chart.chartArea && chart.canvas) {{
+                    // Get canvas position relative to viewport
+                    const canvasRect = chart.canvas.getBoundingClientRect();
+                    const overlayRect = brushOverlay.getBoundingClientRect();
+                    
+                    // Calculate offset between overlay and canvas
+                    const offsetX = overlayRect.left - canvasRect.left;
+                    
+                    // Adjust mouse coordinates to be relative to canvas
+                    const canvasStartX = startX - offsetX;
+                    const canvasEndX = endX - offsetX;
+                    
+                    // Ensure proper ordering regardless of selection direction
+                    const leftX = Math.min(canvasStartX, canvasEndX);
+                    const rightX = Math.max(canvasStartX, canvasEndX);
+                    
+                    const chartArea = chart.chartArea;
+                    const chartLeft = chartArea.left;
+                    const chartRight = chartArea.right;
+                    const chartWidth = chartRight - chartLeft;
+                    
+                    // Account for canvas scaling
+                    const scale = chart.canvas.width / chart.canvas.offsetWidth;
+                    const scaledLeftX = leftX * scale;
+                    const scaledRightX = rightX * scale;
+                    
+                    const leftRatio = Math.max(0, Math.min(1, (scaledLeftX - chartLeft) / chartWidth));
+                    const rightRatio = Math.max(0, Math.min(1, (scaledRightX - chartLeft) / chartWidth));
+                    
+                    // Account for visual offset - same correction as above
+                    const binCount = 20;
+                    const barWidthRatio = 1.0 / binCount;
+                    const offsetCorrection = barWidthRatio * 1.0;
+                    
+                    const minValue = intensityRange.min + Math.max(0, leftRatio - offsetCorrection) * (intensityRange.max - intensityRange.min);
+                    const maxValue = intensityRange.min + Math.max(0, rightRatio - offsetCorrection) * (intensityRange.max - intensityRange.min);
+                    
+                    dbg('Document mouseup - Canvas-relative:', canvasStartX, '-', canvasEndX);
+                    dbg('Document mouseup - Ordered selection:', leftX, '-', rightX);
+                    dbg('Document mouseup - Intensity range:', minValue.toFixed(3), '-', maxValue.toFixed(3));
+                    
+                    applyBrushFilter(minValue, maxValue);
+                }}
+            }}
+            
+            brushSelection = {{ startX, endX }};
+        }}
+    }});
+}}
+
+function applyBrushFilter(minIntensity, maxIntensity) {{
+    // Update range inputs if they exist
+    const minInput = document.getElementById('global_intensity_min');
+    const maxInput = document.getElementById('global_intensity_max');
+    const minVal = document.getElementById('global_intensity_min_val');
+    const maxVal = document.getElementById('global_intensity_max_val');
+    
+    if (minInput && maxInput) {{
+        minInput.value = minIntensity;
+        maxInput.value = maxIntensity;
+        if (minVal) minVal.value = minIntensity.toFixed(3);
+        if (maxVal) maxVal.value = maxIntensity.toFixed(3);
+    }}
+    
+    // Apply filter
+    filteredDataExisting = allDataExisting.filter(row => {{
+        return row.global_intensity >= minIntensity && row.global_intensity <= maxIntensity;
+    }});
+    
+    // Update selection range display
+    document.getElementById('selection-range').textContent = `${{minIntensity.toFixed(2)}} - ${{maxIntensity.toFixed(2)}}`;
+    
+    // Update status text
+    const statusElement = document.getElementById('chart-status');
+    if (statusElement) {{
+        statusElement.textContent = `Filtered: ${{filteredDataExisting.length}} HDRIs`;
+        statusElement.style.color = '#4CAF50';
+    }}
+    
+    updateDashboardSummary();
+    updateExistingChartsWithFilter();
+    updateHDRILinksWithFilter();
+    
+    // Force 3D plots to be ready if they haven't been marked as such
+    if (!plotly3dReady && typeof Plotly !== 'undefined') {{
+        const check3DPlots = () => {{
+            const globalRgbDiv = document.getElementById('globalRgb3dChart');
+            const dcRgbDiv = document.getElementById('dcRgb3dChart');
+            const dominantRgbDiv = document.getElementById('dominantRgb3dChart');
+            const directionDiv = document.getElementById('dominantDirection3dChart');
+            
+            if (globalRgbDiv && globalRgbDiv._fullData && 
+                dcRgbDiv && dcRgbDiv._fullData && 
+                dominantRgbDiv && dominantRgbDiv._fullData && 
+                directionDiv && directionDiv._fullData) {{
+                plotly3dReady = true;
+                updateAll3DCharts();
+            }}
+        }};
+        
+        // Try immediately and after a short delay
+        check3DPlots();
+        setTimeout(check3DPlots, 500);
+    }}
+}}
+
+function clearBrushSelection() {{
+    // Remove visual selection
+    const brushOverlay = document.getElementById('intensity-brush-overlay');
+    if (brushOverlay) {{
+        const selections = brushOverlay.querySelectorAll('.brush-selection');
+        selections.forEach(sel => sel.remove());
+    }}
+    
+    // Reset to full range
+    filteredDataExisting = [...allDataExisting];
+    brushSelection = null;
+    
+    // Update display
+    document.getElementById('selection-range').textContent = 'Full Range';
+    
+    // Reset status text
+    const statusElement = document.getElementById('chart-status');
+    if (statusElement) {{
+        statusElement.textContent = `Showing all ${{allDataExisting.length}} HDRIs`;
+        statusElement.style.color = '#666';
+    }}
+    
+    updateDashboardSummary();
+    updateExistingChartsWithFilter();
+    updateHDRILinksWithFilter();
+    
+    // Reset range inputs
+    const minInput = document.getElementById('global_intensity_min');
+    const maxInput = document.getElementById('global_intensity_max');
+    const minVal = document.getElementById('global_intensity_min_val');
+    const maxVal = document.getElementById('global_intensity_max_val');
+    
+    if (minInput && maxInput) {{
+        minInput.value = intensityRange.min;
+        maxInput.value = intensityRange.max;
+        if (minVal) minVal.value = intensityRange.min.toFixed(3);
+        if (maxVal) maxVal.value = intensityRange.max.toFixed(3);
+    }}
+}}
+
+function toggleCompactFilters() {{
+    const compactFilters = document.getElementById('compact-filters');
+    const toggleBtn = document.getElementById('compact-toggle');
+    
+    if (compactFilters.style.display === 'none') {{
+        compactFilters.style.display = 'block';
+        toggleBtn.textContent = '🔽 Hide Advanced';
+    }} else {{
+        compactFilters.style.display = 'none';
+        toggleBtn.textContent = '⚙️ Advanced Filters';
+    }}
+}}
+
+function updateFilterExisting(filterKey) {{
+    console.log('Updating filter:', filterKey);
+    
+    // Update the numeric input fields
+    const minSlider = document.getElementById(filterKey + '_min');
+    const maxSlider = document.getElementById(filterKey + '_max');
+    const minInput = document.getElementById(filterKey + '_min_val');
+    const maxInput = document.getElementById(filterKey + '_max_val');
+    
+    // Ensure min <= max
+    if (parseFloat(minSlider.value) > parseFloat(maxSlider.value)) {{
+        if (event.target === minSlider) {{
+            maxSlider.value = minSlider.value;
+        }} else {{
+            minSlider.value = maxSlider.value;
+        }}
+    }}
+    
+    minInput.value = parseFloat(minSlider.value).toFixed(3);
+    maxInput.value = parseFloat(maxSlider.value).toFixed(3);
+    
+    // Apply all filters
+    applyAllFiltersExisting();
+}}
+
+function updateFilterFromInputExisting(filterKey, bound) {{
+    const input = document.getElementById(filterKey + '_' + bound + '_val');
+    const slider = document.getElementById(filterKey + '_' + bound);
+    
+    let value = parseFloat(input.value);
+    const config = filterConfigExisting[filterKey];
+    
+    // Clamp to valid range
+    value = Math.max(config.min, Math.min(config.max, value));
+    
+    input.value = value.toFixed(3);
+    slider.value = value;
+    
+    // Ensure min <= max
+    const minSlider = document.getElementById(filterKey + '_min');
+    const maxSlider = document.getElementById(filterKey + '_max');
+    
+    if (parseFloat(minSlider.value) > parseFloat(maxSlider.value)) {{
+        if (bound === 'min') {{
+            maxSlider.value = value;
+            document.getElementById(filterKey + '_max_val').value = value.toFixed(3);
+        }} else {{
+            minSlider.value = value;
+            document.getElementById(filterKey + '_min_val').value = value.toFixed(3);
+        }}
+    }}
+    
+    applyAllFiltersExisting();
+}}
+
+function applyAllFiltersExisting() {{
+    console.log('Applying all filters...');
+    
+    filteredDataExisting = allDataExisting.filter(row => {{
+        for (const [filterKey, config] of Object.entries(filterConfigExisting)) {{
+            const minValue = parseFloat(document.getElementById(filterKey + '_min').value);
+            const maxValue = parseFloat(document.getElementById(filterKey + '_max').value);
+            
+            let columnValue;
+            if (config.column) {{
+                columnValue = row[config.column];
+            }} else {{
+                // Handle calculated columns
+                columnValue = row[filterKey];
+            }}
+            
+            if (columnValue < minValue || columnValue > maxValue) {{
+                return false;
+            }}
+        }}
+        return true;
+    }});
+    
+    console.log('Filtered results:', filteredDataExisting.length, 'out of', allDataExisting.length);
+    
+    // Update dashboard summary
+    updateDashboardSummary();
+    
+    // Update existing charts with filtered data
+    updateExistingChartsWithFilter();
+    
+    // Update HDRI links if they exist
+    updateHDRILinksWithFilter();
+}}
+
+function updateExistingChartsWithFilter() {{
+    // Don't update if charts aren't initialized yet
+    if (!chartsInitialized) {{
+        console.log('Charts not yet initialized, skipping update');
+        return;
+    }}
+    
+    // Update global intensity chart if it exists
+    if (window.Chart && window.Chart.getChart) {{
+        intensityChart = window.Chart.getChart('globalIntensityChart');
+        if (intensityChart) {{
+            updateIntensityChartWithFilter(intensityChart);
+        }}
+    }}
+    
+    // Update all other charts with filtered data
+    updateAreaIntensityChart();
+    updateAllLabCharts();
+    updateAll3DCharts();
+}}
+
+function updateIntensityChartWithFilter(chart) {{
+    if (!chart) return;
+    
+    // Use the original full range for consistent scale
+    const bins = 20;
+    const min = intensityRange.min;
+    const max = intensityRange.max;
+    const binWidth = (max - min) / bins;
+    
+    // Create histogram with original scale
+    const histogram = new Array(bins).fill(0);
+    
+    // Fill histogram with filtered data, but using original scale
+    if (filteredDataExisting.length > 0) {{
+        const filteredIntensities = filteredDataExisting.map(row => row.global_intensity);
+        filteredIntensities.forEach(intensity => {{
+            const binIndex = Math.min(Math.floor((intensity - min) / binWidth), bins - 1);
+            if (binIndex >= 0) {{
+                histogram[binIndex]++;
+            }}
+        }});
+    }}
+    
+    // Update ONLY the data array, nothing else
+    chart.data.datasets[0].data = histogram;
+    
+    // Add visual indication of filter status
+    const isFiltered = filteredDataExisting.length < allDataExisting.length;
+    chart.data.datasets[0].backgroundColor = isFiltered ? 
+        'rgba(76, 175, 80, 0.6)' :  // Green when filtered
+        'rgba(54, 162, 235, 0.6)';  // Blue when showing all data
+    chart.data.datasets[0].borderColor = isFiltered ? 
+        'rgba(76, 175, 80, 1)' : 
+        'rgba(54, 162, 235, 1)';
+    
+    // Update status text
+    const statusElement = document.getElementById('chart-status');
+    if (statusElement) {{
+        if (isFiltered) {{
+            statusElement.textContent = `Filtered view`;
+            statusElement.style.color = '#4CAF50';
+        }} else {{
+            statusElement.textContent = 'Showing all data';
+            statusElement.style.color = '#666';
+        }}
+    }}
+    
+    // Normal update - y-axis will scale, x-axis stays fixed due to chart config
+    chart.update();
+}}
+
+function updateHDRILinksWithFilter() {{
+    const container = document.getElementById('individualLinksContainer');
+    if (container) {{
+        const allLinks = container.querySelectorAll('.individual-link');
+        const filteredNames = new Set(filteredDataExisting.map(row => row.hdri_name));
+        
+        allLinks.forEach(link => {{
+            const hdriName = link.getAttribute('data-hdri-name');
+            if (filteredNames.has(hdriName)) {{
+                link.style.display = 'inline-block';
+                link.style.opacity = '1';
+            }} else {{
+                link.style.display = 'none';
+                link.style.opacity = '0.3';
+            }}
+        }});
+    }}
+}}
+
+// Update Area Intensity Chart - always show original
+function updateAreaIntensityChart() {{
+    // Per user request: always show the original plot for area intensity
+    // No filtering applied to this chart
+    return;
+}}
+
+// Update all LAB charts with grayed out data
+function updateAllLabCharts() {{
+    ['global', 'dc', 'dominant'].forEach(chartType => {{
+        updateLabChart(chartType);
+    }});
+}}
+
+// Update individual LAB chart
+function updateLabChart(chartType) {{
+    const chartId = chartType + 'LabAbChart';
+    const chart = window.Chart.getChart(chartId);
+    if (!chart) return;
+    
+    // Check if original data exists
+    const originalData = originalVisualizationData.labData[chartType];
+    if (!originalData || !originalData.names) {{
+        console.warn(`No original data found for ${{chartType}} LAB chart`);
+        return;
+    }}
+    
+    // Check if we're showing all data (no filter)
+    const isShowingAll = filteredDataExisting.length === allDataExisting.length;
+    
+    if (isShowingAll) {{
+        // Restore original single dataset
+        chart.data.datasets = [{{
+            label: originalData.label || 'Data',
+            data: originalData.points.slice(),
+            pointBackgroundColor: originalData.colors.slice(),
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: originalData.Lvals ? originalData.Lvals.map(L => Math.max(4, (L/100)*8 + 2)) : 5
+        }}];
+        
+        // Restore original tooltip callbacks
+        if (chart.options.plugins.tooltip.callbacks) {{
+            chart.options.plugins.tooltip.callbacks.title = (ctx) => originalData.names[ctx[0].dataIndex];
+            chart.options.plugins.tooltip.callbacks.label = (ctx) => {{
+                const L = originalData.Lvals ? originalData.Lvals[ctx.dataIndex] : 0;
+                return `L*=${{L.toFixed(1)}}, a*=${{ctx.parsed.x.toFixed(1)}}, b*=${{ctx.parsed.y.toFixed(1)}}`;
+            }};
+        }}
+        
+        chart.update();
+        return;
+    }}
+    
+    const filteredNames = new Set(filteredDataExisting.map(row => row.hdri_name));
+    
+    // Create two datasets: one for grayed out, one for selected
+    const grayedPoints = [];
+    const grayedColors = [];
+    const grayedRadius = [];
+    const selectedPoints = [];
+    const selectedColors = [];
+    const selectedRadius = [];
+    
+    // Separate points based on filtering using the names array
+    originalData.names.forEach((name, idx) => {{
+        if (idx < originalData.points.length) {{
+            const point = originalData.points[idx];
+            const color = originalData.colors[idx];
+            const radius = originalData.Lvals ? Math.max(4, (originalData.Lvals[idx]/100)*8 + 2) : 5;
+            
+            if (filteredNames.has(name)) {{
+                selectedPoints.push(point);
+                selectedColors.push(color);
+                selectedRadius.push(radius);
+            }} else {{
+                grayedPoints.push(point);
+                // Make color gray/transparent
+                grayedColors.push('rgba(200, 200, 200, 0.3)');
+                grayedRadius.push(radius * 0.7); // Slightly smaller when grayed
+            }}
+        }}
+    }});
+    
+    // Update chart with two datasets
+    chart.data.datasets = [
+        {{
+            label: 'Other HDRIs',
+            data: grayedPoints,
+            pointBackgroundColor: grayedColors,
+            pointBorderColor: 'rgba(150, 150, 150, 0.5)',
+            pointBorderWidth: 0.5,
+            pointRadius: grayedRadius
+        }},
+        {{
+            label: 'Selected HDRIs',
+            data: selectedPoints,
+            pointBackgroundColor: selectedColors,
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: selectedRadius
+        }}
+    ];
+    
+    // Update tooltip callback to show names
+    const allNames = [];
+    const allLvals = [];
+    
+    // First add grayed names/Lvals, then selected
+    originalData.names.forEach((name, idx) => {{
+        if (!filteredNames.has(name)) {{
+            allNames.push(name);
+            allLvals.push(originalData.Lvals ? originalData.Lvals[idx] : 0);
+        }}
+    }});
+    originalData.names.forEach((name, idx) => {{
+        if (filteredNames.has(name)) {{
+            allNames.push(name);
+            allLvals.push(originalData.Lvals ? originalData.Lvals[idx] : 0);
+        }}
+    }});
+    
+    chart.options.plugins.tooltip.callbacks.title = (ctx) => allNames[ctx[0].dataIndex];
+    chart.options.plugins.tooltip.callbacks.label = (ctx) => {{
+        const L = allLvals[ctx.dataIndex];
+        return `L*=${{L.toFixed(1)}}, a*=${{ctx.parsed.x.toFixed(1)}}, b*=${{ctx.parsed.y.toFixed(1)}}`;
+    }};
+    
+    chart.update();
+}}
+
+// Update all 3D plots
+function updateAll3DCharts() {{
+    // Check if Plotly is loaded
+    if (typeof Plotly === 'undefined') {{
+        console.warn('Plotly not yet loaded, skipping 3D chart updates');
+        return;
+    }}
+    
+    // Check if 3D plots are ready
+    if (!plotly3dReady) {{
+        console.log('3D plots not yet ready, skipping update');
+        return;
+    }}
+    
+    // Update RGB 3D plots
+    ['globalRgb', 'dcRgb', 'dominantRgb'].forEach(plotType => {{
+        update3DRgbPlot(plotType);
+    }});
+    
+    // Update direction 3D plot
+    update3DDirectionPlot();
+}}
+
+// Update individual 3D RGB plot
+function update3DRgbPlot(plotType) {{
+    const chartId = plotType + '3dChart';
+    const plotDiv = document.getElementById(chartId);
+    if (!plotDiv) {{
+        console.warn(`3D plot div not found: ${{chartId}}`);
+        return;
+    }}
+    
+    // Check if Plotly has rendered the chart
+    if (!plotDiv._fullData || plotDiv._fullData.length === 0) {{
+        console.warn(`3D plot not yet rendered: ${{chartId}}`);
+        return;
+    }}
+    
+    // Store original data if not already stored
+    if (!originalVisualizationData.rgb3dData[plotType]) {{
+        originalVisualizationData.rgb3dData[plotType] = {{
+            x: plotDiv._fullData[0].x.slice(),
+            y: plotDiv._fullData[0].y.slice(),
+            z: plotDiv._fullData[0].z.slice(),
+            text: plotDiv._fullData[0].text.slice(),
+            colors: plotDiv._fullData[0].marker.color.slice()
+        }};
+    }}
+    
+    // Check if we're showing all data (no filter)
+    const isShowingAll = filteredDataExisting.length === allDataExisting.length;
+    
+    if (isShowingAll) {{
+        // Restore original single trace
+        const origData = originalVisualizationData.rgb3dData[plotType];
+        const trace = {{
+            x: origData.x,
+            y: origData.y,
+            z: origData.z,
+            mode: 'markers',
+            marker: {{
+                size: 8,
+                color: origData.colors,
+                opacity: 0.8,
+                line: {{ color: '#000', width: 1 }}
+            }},
+            type: 'scatter3d',
+            text: origData.text,
+            name: 'HDRIs',
+            hovertemplate: '<b>%{{text}}</b><br>R: %{{x:.3f}}<br>G: %{{y:.3f}}<br>B: %{{z:.3f}}<br><extra></extra>'
+        }};
+        
+        Plotly.react(chartId, [trace], plotDiv.layout, plotDiv.config);
+        return;
+    }}
+    
+    // Get filtered names for quick lookup
+    const filteredNames = new Set(filteredDataExisting.map(row => row.hdri_name));
+    
+    // Get original data from stored
+    const originalTrace = originalVisualizationData.rgb3dData[plotType];
+    if (!originalTrace) {{
+        console.warn(`No original data found for: ${{chartId}}`);
+        return;
+    }}
+    
+    // Create two traces: one for grayed out, one for selected
+    const grayedTrace = {{
+        x: [],
+        y: [],
+        z: [],
+        mode: 'markers',
+        marker: {{
+            size: 6,
+            color: 'rgba(200, 200, 200, 0.3)',
+            opacity: 0.3,
+            line: {{ color: 'rgba(150, 150, 150, 0.5)', width: 0.5 }}
+        }},
+        type: 'scatter3d',
+        text: [],
+        name: 'Other HDRIs',
+        hovertemplate: '<b>%{{text}}</b><br>R: %{{x:.3f}}<br>G: %{{y:.3f}}<br>B: %{{z:.3f}}<br><extra></extra>'
+    }};
+    
+    const selectedTrace = {{
+        x: [],
+        y: [],
+        z: [],
+        mode: 'markers',
+        marker: {{
+            size: 8,
+            color: [],
+            opacity: 0.9,
+            line: {{ color: '#000', width: 1 }}
+        }},
+        type: 'scatter3d',
+        text: [],
+        name: 'Selected HDRIs',
+        hovertemplate: '<b>%{{text}}</b><br>R: %{{x:.3f}}<br>G: %{{y:.3f}}<br>B: %{{z:.3f}}<br><extra></extra>'
+    }};
+    
+    // Separate points based on filtering
+    for (let i = 0; i < originalTrace.x.length; i++) {{
+        const name = originalTrace.text[i];
+        if (filteredNames.has(name)) {{
+            selectedTrace.x.push(originalTrace.x[i]);
+            selectedTrace.y.push(originalTrace.y[i]);
+            selectedTrace.z.push(originalTrace.z[i]);
+            selectedTrace.text.push(originalTrace.text[i]);
+            selectedTrace.marker.color.push(originalTrace.colors[i]);
+        }} else {{
+            grayedTrace.x.push(originalTrace.x[i]);
+            grayedTrace.y.push(originalTrace.y[i]);
+            grayedTrace.z.push(originalTrace.z[i]);
+            grayedTrace.text.push(originalTrace.text[i]);
+        }}
+    }}
+    
+    // Update plot with both traces
+    Plotly.react(chartId, [grayedTrace, selectedTrace], plotDiv.layout, plotDiv.config);
+}}
+
+// Update 3D direction plot
+function update3DDirectionPlot() {{
+    const chartId = 'dominantDirection3dChart';
+    const plotDiv = document.getElementById(chartId);
+    if (!plotDiv) return;
+    
+    // Check if Plotly has rendered the chart
+    if (!plotDiv._fullData || plotDiv._fullData.length === 0) {{
+        console.warn(`3D direction plot not yet rendered`);
+        return;
+    }}
+    
+    // Store original data if not already stored
+    if (!originalVisualizationData.direction3dData) {{
+        originalVisualizationData.direction3dData = {{
+            x: plotDiv._fullData[0].x.slice(),
+            y: plotDiv._fullData[0].y.slice(),
+            z: plotDiv._fullData[0].z.slice(),
+            text: plotDiv._fullData[0].text.slice(),
+            colors: plotDiv._fullData[0].marker.color.slice()
+        }};
+    }}
+    
+    // Check if we're showing all data (no filter)
+    const isShowingAll = filteredDataExisting.length === allDataExisting.length;
+    
+    if (isShowingAll) {{
+        // Restore original single trace
+        const origData = originalVisualizationData.direction3dData;
+        const trace = {{
+            x: origData.x,
+            y: origData.y,
+            z: origData.z,
+            mode: 'markers',
+            marker: {{
+                size: 8,
+                color: origData.colors,
+                opacity: 0.8,
+                line: {{ color: '#000', width: 1 }}
+            }},
+            type: 'scatter3d',
+            text: origData.text,
+            name: 'HDRIs',
+            hovertemplate: '<b>%{{text}}</b><br>X: %{{x:.3f}}<br>Y: %{{y:.3f}}<br>Z: %{{z:.3f}}<br><extra></extra>'
+        }};
+        
+        Plotly.react(chartId, [trace], plotDiv.layout, plotDiv.config);
+        return;
+    }}
+    
+    // Get filtered names for quick lookup
+    const filteredNames = new Set(filteredDataExisting.map(row => row.hdri_name));
+    
+    // Get original data from stored
+    const originalTrace = originalVisualizationData.direction3dData;
+    if (!originalTrace) {{
+        console.warn(`No original data found for direction plot`);
+        return;
+    }}
+    
+    // Create two traces similar to RGB plots
+    const grayedTrace = {{
+        x: [],
+        y: [],
+        z: [],
+        mode: 'markers',
+        marker: {{
+            size: 6,
+            color: 'rgba(200, 200, 200, 0.3)',
+            opacity: 0.3,
+            line: {{ color: 'rgba(150, 150, 150, 0.5)', width: 0.5 }}
+        }},
+        type: 'scatter3d',
+        text: [],
+        name: 'Other HDRIs',
+        hovertemplate: '<b>%{{text}}</b><br>X: %{{x:.3f}}<br>Y: %{{y:.3f}}<br>Z: %{{z:.3f}}<br><extra></extra>'
+    }};
+    
+    const selectedTrace = {{
+        x: [],
+        y: [],
+        z: [],
+        mode: 'markers',
+        marker: {{
+            size: 10,
+            color: [],
+            opacity: 0.9,
+            line: {{ color: '#000', width: 1 }}
+        }},
+        type: 'scatter3d',
+        text: [],
+        name: 'Selected HDRIs',
+        hovertemplate: '<b>%{{text}}</b><br>X: %{{x:.3f}}<br>Y: %{{y:.3f}}<br>Z: %{{z:.3f}}<br><extra></extra>'
+    }};
+    
+    // Separate points based on filtering
+    for (let i = 0; i < originalTrace.x.length; i++) {{
+        const name = originalTrace.text[i];
+        if (filteredNames.has(name)) {{
+            selectedTrace.x.push(originalTrace.x[i]);
+            selectedTrace.y.push(originalTrace.y[i]);
+            selectedTrace.z.push(originalTrace.z[i]);
+            selectedTrace.text.push(originalTrace.text[i]);
+            selectedTrace.marker.color.push(originalTrace.colors[i]);
+        }} else {{
+            grayedTrace.x.push(originalTrace.x[i]);
+            grayedTrace.y.push(originalTrace.y[i]);
+            grayedTrace.z.push(originalTrace.z[i]);
+            grayedTrace.text.push(originalTrace.text[i]);
+        }}
+    }}
+    
+    // Update plot with both traces
+    Plotly.react(chartId, [grayedTrace, selectedTrace], plotDiv.layout, plotDiv.config);
+}}
+
+function resetAllFiltersExisting() {{
+    console.log('Resetting all filters...');
+    
+    for (const [filterKey, config] of Object.entries(filterConfigExisting)) {{
+        document.getElementById(filterKey + '_min').value = config.default_min;
+        document.getElementById(filterKey + '_max').value = config.default_max;
+        document.getElementById(filterKey + '_min_val').value = config.default_min.toFixed(3);
+        document.getElementById(filterKey + '_max_val').value = config.default_max.toFixed(3);
+    }}
+    
+    applyAllFiltersExisting();
+}}
+
+function exportFilteredDataExisting() {{
+    console.log('Exporting filtered data...');
+    
+    const csvContent = 'HDRI_Name,Global_Intensity,Global_R,Global_G,Global_B\\n' + 
+                      filteredDataExisting.map(row => 
+                          row.hdri_name + ',' + row.global_intensity + ',' + row.global_r + ',' + row.global_g + ',' + row.global_b
+                      ).join('\\n');
+    
+    const blob = new Blob([csvContent], {{ type: 'text/csv' }});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'filtered_hdris.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    alert('Exported ' + filteredDataExisting.length + ' filtered HDRIs to CSV');
+}}
+'''
+
+
 def calculate_pandas_stats(df: pd.DataFrame) -> Dict:
     """Calculate comprehensive statistics using pandas."""
     stats = {}
@@ -1301,29 +2508,10 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
     df = create_dataframe_from_metrics(metrics_data)
     print(f"Created DataFrame with shape: {df.shape}")
 
-    # Apply data sampling for performance with large datasets
-    MAX_VISUALIZATION_POINTS = 500  # Limit to 500 points for performance
-    if num_hdris > MAX_VISUALIZATION_POINTS:
-        print(f"Large dataset detected ({num_hdris} HDRIs). Sampling {MAX_VISUALIZATION_POINTS} points for visualization performance.")
-        
-        # Sample DataFrame
-        viz_df = df.sample(n=MAX_VISUALIZATION_POINTS, random_state=42).sort_index()
-        print(f"Sampled DataFrame with shape: {viz_df.shape}")
-        
-        # Convert back to metrics_data format for visualization
-        viz_data = {
-            'hdri_names': viz_df['hdri_name'].tolist(),
-            'global_color': viz_df[['global_r', 'global_g', 'global_b']].values.tolist(),
-            'global_intensity': viz_df['global_intensity'].tolist(),
-            'dc_color': viz_df[['dc_r', 'dc_g', 'dc_b']].values.tolist(),
-            'dominant_color': viz_df[['dominant_r', 'dominant_g', 'dominant_b']].values.tolist(),
-            'area_intensity': viz_df[['area_r', 'area_g', 'area_b']].values.tolist(),
-            'dominant_direction': viz_df[['dominant_direction_x', 'dominant_direction_y', 'dominant_direction_z']].values.tolist()
-        }
-    else:
-        print(f"Small dataset ({num_hdris} HDRIs). Using all data for visualization.")
-        viz_data = metrics_data
-        viz_df = df
+    # Use all data for visualization (no sampling)
+    print(f"Using all {num_hdris} HDRIs for visualization.")
+    viz_data = metrics_data
+    viz_df = df
 
     # Visualizations container
     visualizations: Dict[str, Dict] = {}
@@ -1374,20 +2562,18 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
     # Summary statistics using pandas - use full dataset for statistics
     stats = calculate_pandas_stats(df)
 
-    # Add sampling info to stats if applicable
-    if num_hdris > MAX_VISUALIZATION_POINTS:
-        stats['sampling_info'] = {
-            'total_hdris': num_hdris,
-            'visualized_hdris': len(viz_data['hdri_names']),
-            'sampling_note': f"Visualizations show a random sample of {len(viz_data['hdri_names'])} HDRIs for performance. Statistics are calculated from all {num_hdris} HDRIs."
-        }
+    # Create filter configuration for interactive filtering
+    filter_config = create_filter_configuration_for_existing(df, stats)
+    print(f"  Created filter configuration with {len(filter_config)} filters")
 
     html_content = _generate_aggregate_html_template(
         experiment_name,
         num_hdris,
         visualizations,
         stats,
-        metrics_data['hdri_names']
+        metrics_data['hdri_names'],
+        df,  # Pass DataFrame for filtering
+        filter_config  # Pass filter configuration
     )
 
     html_path = experiment_dir / f"{experiment_name}_aggregate_statistics.html"
@@ -1450,10 +2636,27 @@ def _generate_aggregate_html_template(
     num_hdris: int,
     visualizations: Dict,
     stats: Dict,
-    hdri_names: List[str]
+    hdri_names: List[str],
+    df: Optional[pd.DataFrame] = None,
+    filter_config: Optional[Dict] = None
 ) -> str:
     def to_js(x):
         return str(x).replace("'", '"')
+
+    # Prepare filter data and controls if filtering is enabled
+    filter_controls_html = ""
+    filter_js = ""
+    df_json = "{}"
+    
+    if df is not None and filter_config is not None:
+        # Convert DataFrame to JavaScript object for filtering
+        df_json = df.to_json(orient='records')
+        
+        # Generate filter controls HTML
+        filter_controls_html = _generate_filter_controls_html_for_existing(filter_config)
+        
+        # Generate filter JavaScript
+        filter_js = _generate_filter_javascript_for_existing(df_json, filter_config, hdri_names)
 
     charts_js = ""
 
@@ -1462,7 +2665,7 @@ def _generate_aggregate_html_template(
         charts_js += f"""
         // Global Intensity Chart
         var globalIntensityCtx = document.getElementById('globalIntensityChart').getContext('2d');
-        new Chart(globalIntensityCtx, {{
+        globalIntensityChart = new Chart(globalIntensityCtx, {{
             type: 'bar',
             data: {{
                 labels: {to_js([f"{x:.3f}" for x in visualizations['global_intensity'][0]])},
@@ -1481,10 +2684,27 @@ def _generate_aggregate_html_template(
                 }},
                 scales: {{
                     y: {{ beginAtZero: true, title: {{ display: true, text: 'Count' }} }},
-                    x: {{ title: {{ display: true, text: 'Global Intensity' }} }}
+                    x: {{ 
+                        title: {{ display: true, text: 'Global Intensity' }},
+                        // Keep x-axis fixed during updates
+                        beforeUpdate: function(scale) {{
+                            if (scale.chart._xAxisFixed) {{
+                                scale.options.min = scale._userMin;
+                                scale.options.max = scale._userMax;
+                            }}
+                        }},
+                        afterFit: function(scale) {{
+                            if (!scale.chart._xAxisFixed) {{
+                                scale._userMin = scale.min;
+                                scale._userMax = scale.max;
+                                scale.chart._xAxisFixed = true;
+                            }}
+                        }}
+                    }}
                 }}
             }}
         }});
+        allCharts.intensity = globalIntensityChart;
         """
 
     # ------------------ Area Intensity RGB Histogram ------------------
@@ -1492,7 +2712,7 @@ def _generate_aggregate_html_template(
         charts_js += f"""
         // Area Intensity RGB Histogram
         var areaIntensityCtx = document.getElementById('areaIntensityChart').getContext('2d');
-        new Chart(areaIntensityCtx, {{
+        allCharts.areaIntensity = new Chart(areaIntensityCtx, {{
             type: 'bar',
             data: {{
                 labels: {to_js([f"{x:.2f}" for x in visualizations['area_intensity']['r'][0]])},
@@ -1601,6 +2821,20 @@ def _generate_aggregate_html_template(
                 var Lvals = {to_js(viz['L'])};
                 console.log('Creating chart with', colors.length, 'colors and', names.length, 'names');
                 
+                // Determine chart type from ID
+                var chartType = '{chart_id}' === 'globalLabAbChart' ? 'global' : 
+                               '{chart_id}' === 'dcLabAbChart' ? 'dc' : 'dominant';
+                
+                // Store original data before creating chart
+                if (!originalVisualizationData.labData[chartType]) {{
+                    originalVisualizationData.labData[chartType] = {{
+                        points: {to_js(points)},
+                        colors: colors.slice(),
+                        names: names.slice(),
+                        Lvals: Lvals.slice()
+                    }};
+                }}
+                
                 var chart = new Chart(ctx, {{
                 type: 'scatter',
                 data: {{ datasets: [{{
@@ -1628,6 +2862,17 @@ def _generate_aggregate_html_template(
                     aspectRatio: 1
                 }}
                             }});
+                
+                // Store chart reference
+                if ('{chart_id}' === 'globalLabAbChart') {{
+                    allCharts.labCharts.global = chart;
+                }}
+                else if ('{chart_id}' === 'dcLabAbChart') {{
+                    allCharts.labCharts.dc = chart;
+                }}
+                else if ('{chart_id}' === 'dominantLabAbChart') {{
+                    allCharts.labCharts.dominant = chart;
+                }}
                 
                 // Chart created successfully
                 console.log('Chart {metric_title} created successfully');
@@ -1695,14 +2940,15 @@ def _generate_aggregate_html_template(
                     xaxis: {{ title: 'Red (0-1)', range: [0, 1], gridcolor: '#ddd' }},
                     yaxis: {{ title: 'Green (0-1)', range: [0, 1], gridcolor: '#ddd' }},
                     zaxis: {{ title: 'Blue (0-1)', range: [0, 1], gridcolor: '#ddd' }},
-                    bgcolor: '#f9f9f9',
+                    bgcolor: '#e8f4f8',
                     camera: {{
                         eye: {{ x: 1.5, y: 1.5, z: 1.5 }}
                     }}
                 }},
                 margin: {{ l: 0, r: 0, t: 30, b: 0 }},
                 paper_bgcolor: '#f9f9f9',
-                plot_bgcolor: '#f9f9f9'
+                plot_bgcolor: '#f9f9f9',
+                showlegend: false
             }};
             
             var config = {{
@@ -1769,14 +3015,15 @@ def _generate_aggregate_html_template(
                     xaxis: {{ title: 'X Direction', range: [-1, 1], gridcolor: '#ddd' }},
                     yaxis: {{ title: 'Y Direction', range: [-1, 1], gridcolor: '#ddd' }},
                     zaxis: {{ title: 'Z Direction', range: [-1, 1], gridcolor: '#ddd' }},
-                    bgcolor: '#f9f9f9',
+                    bgcolor: '#e8f4f8',
                     camera: {{
                         eye: {{ x: 1.5, y: 1.5, z: 1.5 }}
                     }}
                 }},
                 margin: {{ l: 0, r: 0, t: 30, b: 0 }},
                 paper_bgcolor: '#f9f9f9',
-                plot_bgcolor: '#f9f9f9'
+                plot_bgcolor: '#f9f9f9',
+                showlegend: false
             }};
             
             var config = {{
@@ -1959,7 +3206,52 @@ def _generate_aggregate_html_template(
     .header {{ text-align:center; color:#000; margin-bottom:20px; background:#808080; padding:10px; border:2px inset #c0c0c0; }}
     .header h1 {{ font-size:2rem; margin-bottom:5px; font-weight:bold; }}
     .header p {{ font-size:1.1rem; margin:5px 0; }}
-    .content {{ display:grid; grid-template-columns:2fr 1fr; gap:20px; }}
+    .content {{ display:grid; grid-template-columns:1fr; gap:20px; }}
+    
+    /* Visual chart filter styles */
+    .chart-filter-container {{ position:relative; }}
+    .chart-controls-below {{ margin-top:10px; background:rgba(249,249,249,0.95); padding:10px; border:1px solid #ddd; border-radius:5px; }}
+    .range-selector-overlay {{ position:absolute; bottom:50px; left:50px; right:50px; z-index:10; }}
+    .range-slider-visual {{ width:100%; height:30px; background:linear-gradient(to right, #e0e0e0 0%, #4CAF50 50%, #e0e0e0 100%); border-radius:15px; position:relative; cursor:pointer; }}
+    .range-handle {{ position:absolute; top:-5px; width:20px; height:40px; background:#2196F3; border:2px solid #fff; border-radius:10px; cursor:grab; box-shadow:0 2px 5px rgba(0,0,0,0.3); }}
+    .range-handle:active {{ cursor:grabbing; }}
+    .range-highlight {{ position:absolute; top:0; height:100%; background:rgba(76,175,80,0.3); border:2px solid #4CAF50; border-radius:15px; pointer-events:none; }}
+    .range-label {{ position:absolute; bottom:-25px; font-size:12px; font-weight:bold; color:#333; white-space:nowrap; }}
+    
+    /* Brush selection styles */
+    .chart-brush-overlay {{ position:absolute; top:0; left:0; right:0; bottom:0; z-index:5; pointer-events:auto; cursor:crosshair; }}
+    .brush-selection {{ position:absolute; background:rgba(76,175,80,0.2); border:2px solid #4CAF50; border-radius:3px; pointer-events:none; }}
+    .brush-handle {{ position:absolute; top:0; bottom:0; width:8px; background:#4CAF50; cursor:ew-resize; }}
+    .brush-handle.left {{ left:-4px; }}
+    .brush-handle.right {{ right:-4px; }}
+    
+    /* Dashboard-style components */
+    .dashboard-summary {{ background:#fff; padding:20px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+    .dashboard-summary h2 {{ text-align:center; margin-bottom:20px; color:#000; font-size:1.5rem; }}
+    .summary-cards {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:15px; }}
+    .summary-card {{ background:#f8f8f8; border:2px outset #c0c0c0; padding:15px; display:flex; align-items:center; gap:15px; }}
+    .card-icon {{ font-size:2rem; }}
+    .card-content {{ flex:1; }}
+    .card-value {{ font-size:1.8rem; font-weight:bold; color:#000; margin-bottom:5px; }}
+    .card-label {{ font-size:0.9rem; color:#666; }}
+    
+    .dashboard-controls {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+    .control-row {{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }}
+    .dashboard-btn {{ background:#e0e0e0; color:#000; border:2px outset #c0c0c0; padding:10px 20px; font-family:inherit; cursor:pointer; font-size:0.9rem; font-weight:bold; }}
+    .dashboard-btn:hover {{ background:#d0d0d0; }}
+    .dashboard-btn:active {{ border:2px inset #c0c0c0; }}
+    .reset-btn {{ background:#ffebee; color:#c62828; }}
+    .export-btn {{ background:#e8f5e8; color:#2e7d32; }}
+    .toggle-btn {{ background:#fff3e0; color:#ef6c00; }}
+    
+    .compact-filters {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
+    .filter-section {{ margin-bottom:15px; }}
+    .filter-section h4 {{ margin-bottom:10px; color:#000; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0; }}
+    .compact-filter {{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }}
+    .compact-filter label {{ min-width:120px; font-size:0.9rem; font-weight:bold; }}
+    .compact-range {{ display:flex; align-items:center; gap:8px; flex:1; }}
+    .compact-range input[type="range"] {{ flex:1; }}
+    .compact-range input[type="number"] {{ width:70px; padding:3px; font-size:0.8rem; border:1px inset #c0c0c0; }}
     .charts-section, .stats-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; }}
     .intensity-section {{ background:#fff; padding:15px; border:2px inset #c0c0c0; margin-bottom:20px; grid-column:1 / -1; }}
 
@@ -2048,6 +3340,7 @@ def _generate_aggregate_html_template(
 
     @media (max-width: 1024px) {{
         .content {{ grid-template-columns: 1fr; }}
+        .filter-panel-existing {{ max-height:none; margin-bottom:20px; }}
     }}
 </style>
 </head>
@@ -2078,10 +3371,27 @@ def _generate_aggregate_html_template(
         </div>
     </div>
 
+    {filter_controls_html}
+
     <div class=\"intensity-section\">
-        <h2>Intensity Distribution Plots</h2>
+        <h2>📊 Intensity Distribution & Interactive Filtering</h2>
         <div style=\"display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
-            <div class=\"chart-container\"><canvas id=\"globalIntensityChart\"></canvas></div>
+            <div class=\"chart-filter-container\">
+                <div>
+                    <div class=\"chart-container\" style=\"position:relative;\">
+                        <canvas id=\"globalIntensityChart\"></canvas>
+                        <div class=\"chart-brush-overlay\" id=\"intensity-brush-overlay\"></div>
+                    </div>
+                    <div class=\"chart-controls-below\">
+                        <div style=\"display:flex; align-items:center; gap:10px; font-size:0.9rem;\">
+                            <span style=\"font-weight:bold;\">🎯 Click & Drag to Filter:</span>
+                            <span id=\"selection-range\" style=\"color:#4CAF50; font-weight:bold;\">Full Range</span>
+                            <button onclick=\"clearBrushSelection()\" style=\"background:#ff9800; color:white; border:none; padding:3px 8px; border-radius:3px; cursor:pointer; font-size:0.8rem;\">Clear</button>
+                            <span id=\"chart-status\" style=\"font-size:0.8rem; color:#666; margin-left:10px;\">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class=\"chart-container\"><canvas id=\"areaIntensityChart\"></canvas></div>
         </div>
     </div>
@@ -2115,6 +3425,14 @@ def _generate_aggregate_html_template(
     <div class=\"rgb3d-section\">
         <h2>3D RGB Color Space</h2>
         <p style=\"text-align:center; margin-bottom:15px; color:#666; font-size:0.9rem;\">Interactive 3D plots showing RGB values as coordinates. Click and drag to rotate, scroll to zoom.</p>
+        <div class=\"plot3d-legend\" style=\"text-align:center; margin-bottom:20px; font-size:0.9rem;\">
+            <span style=\"display:inline-block; margin-right:20px;\">
+                <span style=\"display:inline-block; width:12px; height:12px; background:rgba(200,200,200,0.3); border:1px solid rgba(150,150,150,0.5); vertical-align:middle;\"></span> Other HDRIs
+            </span>
+            <span style=\"display:inline-block;\">
+                <span style=\"display:inline-block; width:12px; height:12px; background:linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1); border:1px solid #000; vertical-align:middle;\"></span> Selected HDRIs (original colors)
+            </span>
+        </div>
         <div class=\"rgb3d-grid\">
             <div class=\"rgb3d-chart-container\">
                 <h4>Global Color</h4>
@@ -2134,6 +3452,14 @@ def _generate_aggregate_html_template(
     <div class=\"direction3d-section\">
         <h2>3D Dominant Direction Analysis</h2>
         <p style=\"text-align:left; margin-bottom:15px; color:#666; font-size:0.9rem;\">3D visualization of dominant lighting directions as unit vectors. Each point represents the primary direction of illumination for an HDRI, with colors showing the actual dominant color.</p>
+        <div class=\"plot3d-legend\" style=\"text-align:center; margin-bottom:20px; font-size:0.9rem;\">
+            <span style=\"display:inline-block; margin-right:20px;\">
+                <span style=\"display:inline-block; width:12px; height:12px; background:rgba(200,200,200,0.3); border:1px solid rgba(150,150,150,0.5); vertical-align:middle;\"></span> Other HDRIs
+            </span>
+            <span style=\"display:inline-block;\">
+                <span style=\"display:inline-block; width:12px; height:12px; background:linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1); border:1px solid #000; vertical-align:middle;\"></span> Selected HDRIs (original colors)
+            </span>
+        </div>
         <div class=\"direction3d-container\">
             <div class=\"direction3d-chart-container\">
                 <h4>Dominant Direction Vectors</h4>
@@ -2153,7 +3479,42 @@ def _generate_aggregate_html_template(
     </div>
 </div>
 <script>
+// Initialize global variables that charts will use
+let allCharts = {{
+    intensity: null,
+    areaIntensity: null,
+    labCharts: {{
+        global: null,
+        dc: null,
+        dominant: null
+    }},
+    plotly3d: {{
+        globalRgb: null,
+        dcRgb: null,
+        dominantRgb: null,
+        direction: null
+    }}
+}};
+
+let globalIntensityChart = null;
+let intensityRange = {{ min: 0, max: 1 }};
+let originalVisualizationData = {{
+    labData: {{
+        global: null,
+        dc: null,
+        dominant: null
+    }},
+    rgb3dData: {{
+        global: null,
+        dc: null,
+        dominant: null
+    }},
+    direction3dData: null
+}};
+
 {charts_js}
+
+{filter_js}
 </script>
 </body>
 </html>
