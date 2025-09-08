@@ -32,7 +32,9 @@ def naive_metrics(env_map: torch.Tensor, device: Optional[torch.device] = None) 
     # Get RGB and luminance for the region
     lum = luminance(env_map) # (H, W)
 
-    global_color = 255.0 * torch.mean(env_map * sa_map[..., None], dim=(0, 1)) # (3)
+    global_color = torch.mean(env_map * sa_map[..., None], dim=(0, 1)) # (3)
+    global_color = 255 * (global_color / torch.linalg.norm(global_color))
+
     global_intensity = torch.mean(lum * sa_map) # (1)
 
     return NaiveMetricsGPU(

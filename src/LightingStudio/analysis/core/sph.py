@@ -472,14 +472,22 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
 
     # Get Solid Angle
     pixel_area, sin_theta = pixel_solid_angles(H, W, hdri.device) # (H, 1)
-    solid_angle = pixel_area * sin_theta
+    solid_angle = sin_theta # * pixel_area
 
-    # Integrate to get coefficients
+    # # Integrate to get coefficients
+    # sph_coeffs = torch.stack([
+    #     torch.sum(hdri_r[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)), # sum((H, W, None) * (..., n_terms) * (H, 1, None), axis(0,1)) = (n_terms)
+    #     torch.sum(hdri_g[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)),
+    #     torch.sum(hdri_b[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1))
+    # ], dim=1) # (n_terms, 3)
+
     sph_coeffs = torch.stack([
-        torch.sum(hdri_r[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)), # sum((H, W, None) * (..., n_terms) * (H, 1, None), axis(0,1)) = (n_terms)
-        torch.sum(hdri_g[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)),
-        torch.sum(hdri_b[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1))
+        torch.mean(hdri_r[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)), # sum((H, W, None) * (..., n_terms) * (H, 1, None), axis(0,1)) = (n_terms)
+        torch.mean(hdri_g[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)),
+        torch.mean(hdri_b[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1))
     ], dim=1) # (n_terms, 3)
+
+
 
     return sph_coeffs, sph_basis
 
@@ -779,8 +787,10 @@ def get_sph_metrics(env_map: torch.Tensor, l_max: int) -> SPHMetrics:
     env_map_reconstructed = reconstruct_sph_coeffs_to_env(H, W, env_map_sph_coeffs, sph_basis)
 
     # Get DC Term
-    dc_color = env_map_reconstructed[0, 0, 0, :] # any pixel is fine since it is the same for all pixels
-    dc_color = 255 * (dc_color / torch.linalg.norm(dc_color))
+    # TODO: test which dc_color is correct.
+    # dc_color = env_map_reconstructed[0, 0, 0, :] # any pixel is fine since it is the same for all pixels
+    # dc_color = 255 * (dc_color / torch.linalg.norm(dc_color))
+    dc_color = 255 * (env_map_sph_coeffs[0, :] / torch.linalg.norm(env_map_sph_coeffs[0, :]))
 
     # Get Dominant Direction
     dd, dd_rgb_color_difference, dd_rgb_luminance = get_dominant_direction(env_map_sph_coeffs)
