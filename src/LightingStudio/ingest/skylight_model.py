@@ -2,9 +2,19 @@ import torch
 from pathlib import Path
 from coolname import generate_slug
 from tqdm import tqdm
+import argparse
+import random
+import numpy as np
+import math
+import re
+import unicodedata
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
 
 from src.LightingStudio.analysis.utils.io import write_exr
 from src.LightingStudio.analysis.utils.transforms import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map, spherical_to_cartesian, spherical_to_pixel
+
 
 def xyY_to_XYZ(xyY: torch.Tensor) -> torch.Tensor:
     """
@@ -220,7 +230,7 @@ def generate_preetham_sky(H: int, W: int, turbidity: float, sun_dir: torch.Tenso
     RGB = XYZ_to_RGB(XYZ)
 
     # Mask out lower hemisphere
-    lower_hemi = (torch.abs(theta_v) > 0.5 * torch.pi)[..., None] # (H, W, 1) bool
+    lower_hemi = (torch.abs(theta_v) > 0.48 * torch.pi)[..., None] # (H, W, 1) bool
     RGB = torch.where(lower_hemi, torch.zeros_like(RGB), RGB)
 
     # Clamp negative values
@@ -307,77 +317,374 @@ def make_red_circle(img: torch.Tensor, sun_pixel: torch.Tensor, radius: int) -> 
                 img[i, j, :] = torch.tensor([1.0, 0.0, 0.0])
     return img
 
+def month_to_julian_day_range(month: int) -> tuple[int, int]:
+    """
+    Map month (1-12) to Julian day range
+    
+    : params month: int, month number (1-12)
+    : returns tuple: (start_day, end_day) Julian day range for the month
+    """
+    # Approximate Julian day ranges for each month (non-leap year)
+    month_ranges = {
+        1: (1, 31),      # January
+        2: (32, 59),     # February  
+        3: (60, 90),     # March
+        4: (91, 120),    # April
+        5: (121, 151),   # May
+        6: (152, 181),   # June
+        7: (182, 212),   # July
+        8: (213, 243),   # August
+        9: (244, 273),   # September
+        10: (274, 304),  # October
+        11: (305, 334),  # November
+        12: (335, 365)   # December
+    }
+    
+    if month not in month_ranges:
+        raise ValueError(f"Month must be between 1-12, got {month}")
+    
+    return month_ranges[month]
+
+def generate_random_turbidity() -> float:
+    """
+    Generate a random turbidity value between 2.0 and 8.0 with exponential weighting.
+    
+    Uses exponential distribution that heavily favors lower turbidity values (clearer skies)
+    and becomes less likely at higher turbidity values (hazier conditions).
+    
+    Turbidity values represent atmospheric conditions:
+    - 2.0: Very clear sky (excellent visibility) - most likely
+    - 4.0: Average clear sky conditions  
+    - 6.0: Slightly hazy conditions
+    - 8.0: Hazy/smoggy conditions - least likely
+    
+    Returns:
+        float: Exponentially weighted random turbidity value between 2.0 and 8.0
+    """
+    # Generate exponential random variable (lambda=1.0 gives good distribution)
+    exp_value = random.expovariate(1.0)
+    
+    # Clamp to reasonable range (0 to 3) before scaling
+    exp_value = min(exp_value, 3.0)
+    
+    # Scale from [0, 3] to [2.0, 8.0] range
+    turbidity = 2.0 + (exp_value / 3.0) * 6.0
+    
+    return turbidity
+
+
+def unicode_to_ascii_safe(text: str) -> str:
+    """
+    Convert Unicode text to ASCII-safe characters for Windows file paths.
+    
+    This function handles diacritics and special characters that can cause issues
+    with OpenCV file I/O on Windows systems.
+    
+    Args:
+        text: Unicode string (e.g., "Khánh Hòa Province")
+        
+    Returns:
+        ASCII-safe string (e.g., "Khanh_Hoa_Province")
+    """
+    # Normalize Unicode characters to NFD (decomposed form)
+    # This separates base characters from combining diacritics
+    normalized = unicodedata.normalize('NFD', text)
+    
+    # Remove combining characters (diacritics)
+    ascii_text = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
+    
+    # Replace any remaining non-ASCII characters with underscores
+    ascii_text = re.sub(r'[^\x00-\x7F]', '_', ascii_text)
+    
+    # Clean up spaces and punctuation for filename use
+    ascii_text = re.sub(r'[^\w\-]', '_', ascii_text)
+    ascii_text = re.sub(r'_+', '_', ascii_text)  # Remove multiple underscores
+    ascii_text = ascii_text.strip('_')
+    
+    return ascii_text
+
+
+def rand_lat_lon_deg() -> tuple[float, float]:
+    """
+    Generate random latitude and longitude coordinates with uniform distribution on sphere
+    
+    Uses proper spherical sampling to avoid clustering at poles:
+    - Longitude: uniform distribution [-180, 180] degrees
+    - Latitude: arcsin(2u-1) distribution to account for sphere geometry
+    
+    : returns tuple: (latitude_deg, longitude_deg) in degrees
+    
+    Source:
+    Uniform sampling on sphere surface
+    """
+    u = random.random()
+    v = random.random()
+    
+    lon_deg = 360.0 * v - 180.0
+    lat_rad = math.asin(2.0 * u - 1.0)   # φ ~ arcsin(2u-1) for uniform sphere sampling
+    lat_deg = math.degrees(lat_rad)
+    
+    return lat_deg, lon_deg
+
+def get_location_name(lat_deg: float, lon_deg: float) -> str:
+    """
+    Get location name from latitude and longitude coordinates using reverse geocoding
+    
+    : params lat_deg: float, latitude in degrees
+    : params lon_deg: float, longitude in degrees
+    : returns str: location name (city, country) or coordinates if geocoding fails
+    """
+    try:
+        geolocator = Nominatim(user_agent="lighting_studio_hdri_generator", timeout=3)
+        location = geolocator.reverse(f"{lat_deg}, {lon_deg}", exactly_one=True, language='en')
+        
+        if location and location.address:
+            # Extract meaningful parts from the address
+            address_parts = location.address.split(', ')
+            
+            # Try to get city and country, fallback to available parts
+            if len(address_parts) >= 2:
+                # Usually the last part is country, second to last might be state/region
+                country = address_parts[-1]
+                city_or_region = None
+                
+                # Look for a city-like component (avoid postal codes, coordinates)
+                for part in reversed(address_parts[:-1]):
+                    if not re.match(r'^\d+', part) and len(part) > 2:  # Skip numbers and very short strings
+                        city_or_region = part
+                        break
+                
+                if city_or_region:
+                    # Clean up the location name for filename use
+                    location_name = f"{city_or_region}_{country}"
+                else:
+                    location_name = country
+                
+                # Convert Unicode characters to ASCII-safe equivalents for Windows compatibility
+                location_name = unicode_to_ascii_safe(location_name)
+                
+                return location_name
+        
+    except (GeocoderTimedOut, GeocoderServiceError, Exception):
+        pass  # Fall back to coordinates
+    
+    # Fallback to coordinates if geocoding fails
+    lat_str = f"{abs(lat_deg):.1f}{'N' if lat_deg >= 0 else 'S'}"
+    lon_str = f"{abs(lon_deg):.1f}{'E' if lon_deg >= 0 else 'W'}"
+    return f"{lat_str}_{lon_str}"
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
 
+def generate_single_hdri(H: int, W: int, elevation: float, azimuth: float, output_dir: Path) -> None:
+    """
+    Generate a single HDRI from direct parameters
+    
+    : params H: int, height of the image
+    : params W: int, width of the image  
+    : params elevation: float, elevation angle in radians
+    : params azimuth: float, azimuth angle in radians
+    : params output_dir: Path, output directory
+    """
+    # Generate random turbidity for this HDRI
+    turbidity = generate_random_turbidity()
+    
+    print(f"Generating single HDRI with parameters:")
+    print(f"  Resolution: {H}x{W}")
+    print(f"  Turbidity: {turbidity:.2f} (randomly generated)")
+    print(f"  Elevation: {elevation:.4f} rad ({np.degrees(elevation):.2f}°)")
+    print(f"  Azimuth: {azimuth:.4f} rad ({np.degrees(azimuth):.2f}°)")
+    
+    # Create spherical coordinates and convert to cartesian direction
+    spherical_coordinates = torch.stack([torch.tensor([elevation]), torch.tensor([azimuth])], dim=-1)
+    sun_dir = spherical_to_cartesian(spherical_coordinates)
+    
+    # Generate HDRI
+    img = generate_preetham_sky(H, W, turbidity, sun_dir)
+    
+    # Save the image
+    output_path = output_dir / f"single_hdri_T{turbidity:.2f}_elev{np.degrees(elevation):.1f}_azim{np.degrees(azimuth):.1f}.exr"
+    write_exr(img, str(output_path))
+    print(f"Saved HDRI to: {output_path}")
+
+def generate_batch_hdri(H: int, W: int, n_locations: int, months: list[int], output_dir: Path, horizon_only: bool = False, horizon_threshold: float = 10.0) -> None:
+    """
+    Generate batch HDRIs from random locations and specified months
+    
+    : params H: int, height of the image
+    : params W: int, width of the image
+    : params n_locations: int, number of random locations to sample
+    : params months: list[int], list of months (1-12) to generate for
+    : params output_dir: Path, output directory
+    : params horizon_only: bool, only generate images with sun near horizon
+    : params horizon_threshold: float, maximum elevation angle in degrees for horizon sampling
+    """
+    print(f"Generating batch HDRIs with parameters:")
+    print(f"  Resolution: {H}x{W}")
+    print(f"  Turbidity: Random (2.0-8.0) for each HDRI")
+    print(f"  Number of locations: {n_locations}")
+    print(f"  Months: {months}")
+    if horizon_only:
+        print(f"  Horizon only mode: True (max elevation: {horizon_threshold}°)")
+    else:
+        print(f"  Horizon only mode: False")
+    
+    count = 0
+    
+    # Generate random locations
+    for location_idx in range(n_locations):
+        # Sample random latitude and longitude
+        lat_deg, lon_deg = rand_lat_lon_deg()
+        
+        # Get location name for this coordinate
+        location_name = get_location_name(lat_deg, lon_deg)
+
+        lat_deg_tensor = torch.tensor([lat_deg])
+        lon_deg_tensor = torch.tensor([lon_deg])
+        SM = get_sm_rad_from_long_deg(lon_deg_tensor)
+        
+        print(f"\nLocation {location_idx + 1}: {location_name} (Lat={lat_deg:.2f}°, Lon={lon_deg:.2f}°)")
+        
+        # Process each month
+        for month in months:
+            start_day, end_day = month_to_julian_day_range(month)
+            
+            # Sample a few days from the month (e.g., beginning, middle, end)
+            sample_days = [start_day, (start_day + end_day) // 2, end_day]
+            
+            for J in sample_days:
+                # Generate random turbidity for this specific HDRI
+                turbidity = generate_random_turbidity()
+                print(f"Day {J}, Turbidity: {turbidity:.2f}")
+
+                # Sample all 24 hours of the day
+                for ts in range(24):
+                    lat_radians = torch.deg2rad(lat_deg_tensor)
+                    lon_radians = torch.deg2rad(lon_deg_tensor)
+                    
+                    t, theta_s, phi_s = spherical_coordinates_from_sun_position(
+                        torch.tensor(J), torch.tensor(ts), lat_radians, lon_radians, SM
+                    )
+                   
+                    elev = torch.pi/2.0 - torch.abs(theta_s)
+                    azim = phi_s
+                    
+                    # Convert elevation to degrees for horizon filtering
+                    elev_degrees = np.degrees(elev.item())
+                    
+                    # If horizon_only mode is enabled, skip images where sun is too high
+                    within_horizon = (elev_degrees > 0.0 and elev_degrees < horizon_threshold)
+                    if (horizon_only and not within_horizon):
+                        continue
+                   
+                    spherical_coordinates = torch.stack([elev, azim], dim=-1)
+                    sun_dir = spherical_to_cartesian(spherical_coordinates)
+                    
+                    img = generate_preetham_sky(H, W, turbidity, sun_dir)
+                    
+                    # Create descriptive filename
+                    horizon_suffix = "_horizon" if horizon_only else ""
+                    # output_path = output_dir / f"batch_hdri_{location_name}_month{month}_day{J}_time{ts:02d}_elev{elev_degrees:.1f}{horizon_suffix}_f_{count:04d}.exr"
+                    output_path = output_dir / f"batch_hdri_{location_name}_f_{count:04d}.exr"
+                    write_exr(img, str(output_path))
+                    count += 1
+    
+    print(f"\nGenerated {count} HDRIs total")
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Generate Preetham sky HDRIs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate single HDRI with specific parameters (turbidity randomly assigned)
+  python skylight_model.py single --height 512 --width 1024 --elevation 0.5 --azimuth 1.2
+  
+  # Generate batch HDRIs from random locations (turbidity randomly assigned per HDRI)
+  python skylight_model.py batch --height 256 --width 512 --n_locations 5 --months 6 7 8
+  
+  # Generate sunset/sunrise HDRIs only (sun near horizon)
+  python skylight_model.py batch --height 256 --width 512 --n_locations 3 --months 6 7 8 --horizon_only --horizon_threshold 15.0
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='mode', help='Generation mode')
+    
+    # Single HDRI mode
+    single_parser = subparsers.add_parser('single', help='Generate single HDRI from direct parameters')
+    single_parser.add_argument('--height', '-H', type=int, required=True, help='Height of the HDRI')
+    single_parser.add_argument('--width', '-W', type=int, required=True, help='Width of the HDRI')
+    single_parser.add_argument('--elevation', '-e', type=float, required=True, help='Elevation angle in radians')
+    single_parser.add_argument('--azimuth', '-a', type=float, required=True, help='Azimuth angle in radians')
+    
+    # Batch HDRI mode
+    batch_parser = subparsers.add_parser('batch', help='Generate batch HDRIs from random locations and months')
+    batch_parser.add_argument('--height', '-H', type=int, required=True, help='Height of the HDRI')
+    batch_parser.add_argument('--width', '-W', type=int, required=True, help='Width of the HDRI')
+    batch_parser.add_argument('--n_locations', '-n', type=int, required=True, help='Number of random locations to sample')
+    batch_parser.add_argument('--months', '-m', type=int, nargs='+', required=True, 
+                            help='Months to generate for (1-12)', choices=range(1, 13))
+    batch_parser.add_argument('--horizon_only', action='store_true', 
+                            help='Only generate images with sun near horizon (sunset/sunrise conditions)')
+    batch_parser.add_argument('--horizon_threshold', type=float, default=10.0,
+                            help='Maximum elevation angle in degrees for horizon sampling (default: 10.0)')
+    
+    # Common arguments
+    for subparser in [single_parser, batch_parser]:
+        subparser.add_argument('--output_dir', '-o', type=str, default=None, 
+                             help='Output directory (default: auto-generated)')
+        subparser.add_argument('--seed', '-s', type=int, default=None,
+                             help='Random seed for reproducibility')
+    
+    return parser.parse_args()
+
+# python -m src.LightingStudio.ingest.skylight_model batch -H 512 -W 1024 -n 1 -m 1 --horizon_only
+# python -m src.LightingStudio.ingest.skylight_model single -H 512 -W 1024 -e 0.7854 -a 1.570
+
 # -----------------------------
-# Example
+# Main
 # -----------------------------
 if __name__ == "__main__":
-    H, W = 256, 512
-    T = 2.3
-
-    # Original Direct    
-    # elev = torch.tensor([(1/8)*torch.pi/2.0])
-    # azim = torch.tensor([-(7/8)*torch.pi])
-
-    # elev = torch.tensor([0.3670])
-    # azim = torch.tensor([-1.8645])
-
-    # print("elev: ", elev)
-    # print("azim: ", azim)
-
-    # spherical_coordinates = torch.stack([elev, azim], dim=-1)
-    # print(f"spherical_coordinates: {spherical_coordinates}, with shape: {spherical_coordinates.shape}")
-
-    # sun_dir = spherical_to_cartesian(spherical_coordinates)
-    # print("sun_dir: ", sun_dir)
-
-    # img = generate_preetham_sky(H, W, T, sun_dir)
-    # write_exr(img, "preetham_sky_original_direction.exr")
-
-    # Create random directory for output
-    experiment_name = generate_slug(2)
-    output_dir = Path(OUTPUT_DIR) / experiment_name
+    args = parse_arguments()
+    
+    if args.mode is None:
+        print("Error: Please specify a mode (single or batch)")
+        print("Use --help for usage information")
+        exit(1)
+    
+    # Set random seed if provided
+    if args.seed is not None:
+        random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"Set random seed to: {args.seed}")
+    
+    # Create output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        experiment_name = generate_slug(2)
+        output_dir = Path(OUTPUT_DIR) / experiment_name
+    
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {output_dir}")
-
-    lat_deg = torch.tensor([19.74])
-    lon_deg = torch.tensor([-155.98])
-    SM = get_sm_rad_from_long_deg(lon_deg)
-
-    count = 0
-    for J in tqdm(range(1), desc="Generating Preetham sky"):
-        for ts in range(24):
-            lat_radians = torch.deg2rad(lat_deg)
-            lon_radians = torch.deg2rad(lon_deg)
-
-            t, theta_s, phi_s = spherical_coordinates_from_sun_position(J, ts, lat_radians, lon_radians, SM)
-
-            elev = torch.pi/2.0 - torch.abs(theta_s)
-            azim = phi_s
+    
+    # Validate image dimensions
+    if args.height <= 0 or args.width <= 0:
+        print("Error: Height and width must be positive integers")
+        exit(1)
+    
+    # Execute based on mode
+    if args.mode == 'single':
+        generate_single_hdri(args.height, args.width, 
+                            args.elevation, args.azimuth, output_dir)
+    
+    elif args.mode == 'batch':
+        if args.n_locations <= 0:
+            print("Error: Number of locations must be positive")
+            exit(1)
         
-            spherical_coordinates = torch.stack([elev, azim], dim=-1)
-            sun_dir = spherical_to_cartesian(spherical_coordinates)
-            sun_pixel = spherical_to_pixel(spherical_coordinates.unsqueeze(0), H, W).squeeze(0).squeeze(0)
-
-            print(
-                f"count: {count}, "
-                # f"lat_deg: {lat_deg}, lon_deg: {lon_deg}, "
-                # f"lat_radians: {lat_radians}, lon_radians: {lon_radians}, SM: {SM}, t: {t}, "
-                f"theta_s: {theta_s}, phi_s: {phi_s}, elev: {elev}, azim: {azim}, "
-                f"spherical_coordinates: {spherical_coordinates}, sun_dir: {sun_dir}, sun_pixel: {sun_pixel}"
-                # f"J: {J}, ts: {ts}"
-            )
-            print("-"*100)
-
-            img = generate_preetham_sky(H, W, T, sun_dir)  # (H,W,3) linear sRGB
-
-            # make a pink circle around sun_pixel
-            img = make_red_circle(img, sun_pixel, 10)
-
-            # Write EXR to the random directory
-            output_path = output_dir / f"preetham_hawaii_{count}.exr"
-            write_exr(img, str(output_path))
-            count += 1
+        generate_batch_hdri(args.height, args.width, 
+                          args.n_locations, args.months, output_dir,
+                          args.horizon_only, args.horizon_threshold)

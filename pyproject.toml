@@ -24,7 +24,8 @@ dependencies = [
     "trame-vuetify",
     "vtk",
     "opencv-python",
-    "coolname"
+    "coolname",
+    "geopy"
 ]
 
 [project.optional-dependencies]

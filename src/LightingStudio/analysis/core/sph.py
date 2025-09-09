@@ -481,14 +481,13 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
     #     torch.sum(hdri_b[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1))
     # ], dim=1) # (n_terms, 3)
 
+    # Mean to get coefficients
     sph_coeffs = torch.stack([
         torch.mean(hdri_r[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)), # sum((H, W, None) * (..., n_terms) * (H, 1, None), axis(0,1)) = (n_terms)
         torch.mean(hdri_g[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1)),
         torch.mean(hdri_b[:, :, None] * sph_basis * solid_angle[..., None], dim=(0, 1))
     ], dim=1) # (n_terms, 3)
-
-
-
+    
     return sph_coeffs, sph_basis
 
 def project_direction_into_coefficients(direction: torch.Tensor, l_max:int) -> torch.Tensor:
@@ -609,14 +608,31 @@ def get_dominant_direction(sph_coeffs: torch.Tensor) ->  tuple[torch.Tensor, tor
 
     # Use [7] Section 3.3 NOT [2] page 4
     # The reason there is a negative sign in the 1st index is the difference in artist and science definition of env_map direction.
-    red_band_aligned_xyz = torch.tensor([-red_band_1[2], -red_band_1[0], red_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
-    red_band_aligned_xyz = red_band_aligned_xyz / torch.linalg.norm(red_band_aligned_xyz)
+    eps = 1e-8  # Small epsilon to avoid division by zero
 
-    green_band_aligned_xyz = torch.tensor([-green_band_1[2], -green_band_1[0], green_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
-    green_band_aligned_xyz = green_band_aligned_xyz / torch.linalg.norm(green_band_aligned_xyz)
+    red_band_aligned_xyz = torch.tensor(
+        [-red_band_1[2], -red_band_1[0], red_band_1[1]],
+        device=sph_coeffs.device,
+        dtype=sph_coeffs.dtype,
+    )
+    red_norm = torch.linalg.norm(red_band_aligned_xyz)
+    red_band_aligned_xyz = red_band_aligned_xyz / (red_norm + eps)
 
-    blue_band_aligned_xyz = torch.tensor([-blue_band_1[2], -blue_band_1[0], blue_band_1[1]], device=sph_coeffs.device, dtype=sph_coeffs.dtype)
-    blue_band_aligned_xyz = blue_band_aligned_xyz / torch.linalg.norm(blue_band_aligned_xyz)
+    green_band_aligned_xyz = torch.tensor(
+        [-green_band_1[2], -green_band_1[0], green_band_1[1]],
+        device=sph_coeffs.device,
+        dtype=sph_coeffs.dtype,
+    )
+    green_norm = torch.linalg.norm(green_band_aligned_xyz)
+    green_band_aligned_xyz = green_band_aligned_xyz / (green_norm + eps)
+
+    blue_band_aligned_xyz = torch.tensor(
+        [-blue_band_1[2], -blue_band_1[0], blue_band_1[1]],
+        device=sph_coeffs.device,
+        dtype=sph_coeffs.dtype,
+    )
+    blue_norm = torch.linalg.norm(blue_band_aligned_xyz)
+    blue_band_aligned_xyz = blue_band_aligned_xyz / (blue_norm + eps)
 
     color_xyz = torch.stack([red_band_aligned_xyz, green_band_aligned_xyz, blue_band_aligned_xyz], dim=1)
 
