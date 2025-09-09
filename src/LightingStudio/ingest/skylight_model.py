@@ -53,7 +53,7 @@ def XYZ_to_RGB(XYZ: torch.Tensor) -> torch.Tensor:
     # TODO: Check if XYZ_to_linear should be transposed??
     return  torch.einsum("hwc,cd->hwd", XYZ, XYZ_to_linear)
 
-def tonemap(img: torch.Tensor, exposure: float = 0.1) -> torch.Tensor:
+def tonemap(img: torch.Tensor, exposure: float = 0.2) -> torch.Tensor:
     """
     Tonemap
 
@@ -183,6 +183,77 @@ def perez_F(theta: torch.Tensor, gamma: torch.Tensor, coeffs: torch.Tensor) -> t
 
     return (1.0 + A * torch.exp(B / cos_theta)) * (1.0 + C * torch.exp(D * gamma) + E * cos_gamma_squared)
 
+def add_ground_hemisphere(sky_rgb: torch.Tensor, theta_v: torch.Tensor, turbidity: float, horizon_threshold: float) -> torch.Tensor:
+    """
+    Add a natural ground hemisphere to the sky image with smooth transitions.
+    Assumes the lower hemisphere is already zeroed out.
+    
+    Args:
+        sky_rgb: Sky RGB with lower hemisphere already set to zero (H, W, 3)
+        theta_v: Viewing elevation angles in radians (H, W)  
+        turbidity: Atmospheric turbidity value
+        horizon_threshold: Threshold angle for horizon in radians
+        
+    Returns:
+        torch.Tensor: Sky + ground RGB (H, W, 3)
+    """
+    result = sky_rgb.clone()
+    
+    # Ground region (below horizon)  
+    ground_mask = torch.abs(theta_v) > horizon_threshold
+    if not ground_mask.any():
+        return result
+    
+    # 1. Sample horizon colors for realistic ground lighting
+    horizon_sample_mask = (torch.abs(theta_v) <= horizon_threshold) & (torch.abs(theta_v) > horizon_threshold - 0.05)
+    if horizon_sample_mask.any():
+        horizon_color = torch.mean(sky_rgb[horizon_sample_mask], dim=0)
+    else:
+        horizon_color = torch.tensor([0.1, 0.1, 0.1], device=sky_rgb.device, dtype=sky_rgb.dtype)
+    
+    # 2. Distance-based falloff from horizon
+    ground_distance = torch.abs(theta_v) - horizon_threshold
+    max_distance = torch.pi/2 - horizon_threshold
+    normalized_distance = ground_distance / max_distance
+    
+    # Exponential falloff (stronger for clearer skies)
+    falloff_strength = 2.5 + (8.0 - turbidity) * 0.3
+    horizon_falloff = torch.exp(-falloff_strength * normalized_distance)
+    
+    # 3. Ground ambient lighting (varies with atmospheric conditions)
+    ground_ambient_strength = 0.015 + (turbidity - 2.0) * 0.005  # More haze = more ambient
+    ground_base_color = torch.tensor([0.2, 0.18, 0.15], device=sky_rgb.device, dtype=sky_rgb.dtype)  # Warm earth tone
+    ground_ambient = ground_base_color * ground_ambient_strength
+    
+    # 4. Sky color influence on ground
+    sky_influence = horizon_color * 0.08  # Ground reflects sky color
+    
+    # 5. Combine ground contributions
+    horizon_glow = horizon_color * horizon_falloff[..., None] * 0.25
+    total_ground = horizon_glow + ground_ambient + sky_influence[None, None, :]
+    
+    # Apply to ground region
+    result[ground_mask] = total_ground[ground_mask]
+    
+    # 6. Create smooth transition zone at horizon
+    transition_width = 0.03  # Wider transition for smoother blend
+    transition_mask = (torch.abs(theta_v) > horizon_threshold - transition_width) & (torch.abs(theta_v) <= horizon_threshold + transition_width)
+    
+    if transition_mask.any():
+        # Smooth blend function (cosine interpolation for natural feel)
+        t = (torch.abs(theta_v) - (horizon_threshold - transition_width)) / (2 * transition_width)
+        t = torch.clamp(t, 0, 1)
+        # Use cosine for smoother transition than linear
+        blend_factor = 0.5 * (1 - torch.cos(t * torch.pi))
+        
+        sky_part = sky_rgb * (1 - blend_factor[..., None])
+        ground_part = total_ground * blend_factor[..., None]
+        
+        result[transition_mask] = (sky_part + ground_part)[transition_mask]
+    
+    return result
+
+
 def generate_preetham_sky(H: int, W: int, turbidity: float, sun_dir: torch.Tensor) -> torch.Tensor:
     """
     Generate Preetham based hdri map
@@ -229,9 +300,13 @@ def generate_preetham_sky(H: int, W: int, turbidity: float, sun_dir: torch.Tenso
     XYZ = xyY_to_XYZ(torch.stack([x, y, Y], dim=-1))
     RGB = XYZ_to_RGB(XYZ)
 
-    # Mask out lower hemisphere
-    lower_hemi = (torch.abs(theta_v) > 0.48 * torch.pi)[..., None] # (H, W, 1) bool
-    RGB = torch.where(lower_hemi, torch.zeros_like(RGB), RGB)
+    # First mask out the lower hemisphere (Preetham model is invalid there)
+    horizon_threshold = 0.48 * torch.pi
+    lower_hemi_mask = torch.abs(theta_v) > horizon_threshold
+    RGB = torch.where(lower_hemi_mask[..., None], torch.zeros_like(RGB), RGB)
+    
+    # Add natural ground hemisphere
+    RGB = add_ground_hemisphere(RGB, theta_v, turbidity, horizon_threshold)
 
     # Clamp negative values
     RGB = torch.clamp(RGB, 0.0, None)
@@ -571,7 +646,11 @@ def generate_batch_hdri(H: int, W: int, n_locations: int, months: list[int], out
                     
                     # Convert elevation to degrees for horizon filtering
                     elev_degrees = np.degrees(elev.item())
-                    
+
+                    # Only when sun is visible
+                    if elev_degrees <= 0.0:
+                        continue
+
                     # If horizon_only mode is enabled, skip images where sun is too high
                     within_horizon = (elev_degrees > 0.0 and elev_degrees < horizon_threshold)
                     if (horizon_only and not within_horizon):
@@ -585,7 +664,7 @@ def generate_batch_hdri(H: int, W: int, n_locations: int, months: list[int], out
                     # Create descriptive filename
                     horizon_suffix = "_horizon" if horizon_only else ""
                     # output_path = output_dir / f"batch_hdri_{location_name}_month{month}_day{J}_time{ts:02d}_elev{elev_degrees:.1f}{horizon_suffix}_f_{count:04d}.exr"
-                    output_path = output_dir / f"batch_hdri_{location_name}_f_{count:04d}.exr"
+                    output_path = output_dir / f"batch_hdri_{location_name}_{horizon_suffix}_f_{count:04d}.exr"
                     write_exr(img, str(output_path))
                     count += 1
     
