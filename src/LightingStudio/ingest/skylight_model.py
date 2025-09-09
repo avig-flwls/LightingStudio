@@ -4,7 +4,7 @@ from coolname import generate_slug
 from tqdm import tqdm
 
 from src.LightingStudio.analysis.utils.io import write_exr
-from src.LightingStudio.analysis.utils.transforms import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map, spherical_to_cartesian
+from src.LightingStudio.analysis.utils.transforms import cartesian_to_spherical, convert_theta, generate_spherical_coordinates_map, spherical_to_cartesian, spherical_to_pixel
 
 def xyY_to_XYZ(xyY: torch.Tensor) -> torch.Tensor:
     """
@@ -18,7 +18,10 @@ def xyY_to_XYZ(xyY: torch.Tensor) -> torch.Tensor:
     [19] xyY_to_XYZ function
     """
     x, y, Y = xyY[..., 0], xyY[..., 1], xyY[..., 2]
-    return torch.stack([x * Y / y, Y, (1 - x - y) * Y / y], dim=-1)
+    # Avoid division by zero
+    y_safe = torch.clamp(y, min=1e-6)
+
+    return  torch.stack([x * Y / y_safe, Y, (1 - x - y) * Y / y_safe], dim=-1)
 
 def XYZ_to_RGB(XYZ: torch.Tensor) -> torch.Tensor:
     """
@@ -220,10 +223,13 @@ def generate_preetham_sky(H: int, W: int, turbidity: float, sun_dir: torch.Tenso
     lower_hemi = (torch.abs(theta_v) > 0.5 * torch.pi)[..., None] # (H, W, 1) bool
     RGB = torch.where(lower_hemi, torch.zeros_like(RGB), RGB)
 
+    # Clamp negative values
+    RGB = torch.clamp(RGB, 0.0, None)
+
     # Tonemap
     tonemap_RGB = tonemap(RGB)
 
-    return tonemap_RGB 
+    return tonemap_RGB
 
 def get_sm_rad_from_long_deg(lon_deg: torch.Tensor) -> torch.Tensor:
     """
@@ -261,21 +267,18 @@ def spherical_coordinates_from_sun_position(
 
     # --- Solar time t (decimal hours) -----------------------------------------
     # t = ts + 0.170 * sin(4π(J - 80)/373) - 0.129 * sin(2π(J - 8)/355) + 12*(SM - lon)/π
-    two_pi = torch.tensor(2.0 * torch.pi)
-    pi     = torch.tensor(torch.pi)
-
-    term1 = 0.170 * torch.sin((4.0 * pi) * (J - 80.0) / 373.0)
-    term2 = 0.129 * torch.sin((2.0 * pi) * (J - 8.0)  / 355.0)
-    t = ts + term1 - term2 + 12.0 * (SM - lon) / pi  # solar time (hours) 
+    term1 = 0.170 * torch.sin((4.0 * torch.tensor(torch.pi)) * (J - 80.0) / 373.0)
+    term2 = 0.129 * torch.sin((2.0 * torch.tensor(torch.pi)) * (J - 8.0)  / 355.0)
+    t = ts + term1 - term2 + 12.0 * (SM - lon) / torch.pi  # solar time (hours) 
 
     # --- Solar declination δ (radians) -----------------------------------------
     # δ = 0.4093 * sin(2π(J - 81)/368)
-    delta = 0.4093 * torch.sin(two_pi * (J - 81.0) / 368.0)  
+    delta = 0.4093 * torch.sin((2.0 * torch.tensor(torch.pi)) * (J - 81.0) / 368.0)  
 
     # --- Hour angle H (radians) using solar time t -----------------------------
     # Standard: H = π/12 * (t - 12). (Solar noon -> H=0)
     # H = (pi / 12.0) * (t - 12.0)
-    H = (pi * t / 12.0) 
+    H = (torch.pi * t / 12.0) 
 
     # --- Solar zenith θ_s and azimuth φ_s -------------------------------------
     # PAPER’s forms (A.6):
@@ -283,12 +286,26 @@ def spherical_coordinates_from_sun_position(
     # φ_s = atan2( -cos(δ) sin(H),  cos(lat) sin(δ) - sin(lat) cos(δ) cos(H) )
     # (This atan2 yields azimuth measured from SOUTH, positive toward WEST, matching the paper’s convention.)
 
-    theta_s = torch.pi/2.0 - torch.asin(torch.sin(lat) * torch.sin(delta) + torch.cos(lat) * torch.cos(delta) * torch.cos(H))
+    theta_s = torch.pi/2.0 - torch.asin(torch.sin(lat) * torch.sin(delta) - torch.cos(lat) * torch.cos(delta) * torch.cos(H))
     phi_s = torch.atan2(-torch.cos(delta) * torch.sin(H), torch.cos(lat) * torch.sin(delta) - torch.sin(lat) * torch.cos(delta) * torch.cos(H))
 
     return t, theta_s, phi_s
 
-
+def make_red_circle(img: torch.Tensor, sun_pixel: torch.Tensor, radius: int) -> torch.Tensor:
+    """
+    Make a red circle around the sun pixel
+    """
+    H, W = img.shape[0], img.shape[1]
+    # sun_pixel has shape (2,) where it contains [x, y]
+    sun_x = sun_pixel[0].item()
+    sun_y = sun_pixel[1].item()
+    
+    for i in range(H):
+        for j in range(W):
+            # Note: i corresponds to y (row) and j corresponds to x (column)
+            if (i - sun_y)**2 + (j - sun_x)**2 <= radius**2:
+                img[i, j, :] = torch.tensor([1.0, 0.0, 0.0])
+    return img
 
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
@@ -302,8 +319,11 @@ if __name__ == "__main__":
     T = 2.3
 
     # Original Direct    
-    # elev = torch.tensor([(7/8)*torch.pi/2.0])
+    # elev = torch.tensor([(1/8)*torch.pi/2.0])
     # azim = torch.tensor([-(7/8)*torch.pi])
+
+    # elev = torch.tensor([0.3670])
+    # azim = torch.tensor([-1.8645])
 
     # print("elev: ", elev)
     # print("azim: ", azim)
@@ -314,35 +334,49 @@ if __name__ == "__main__":
     # sun_dir = spherical_to_cartesian(spherical_coordinates)
     # print("sun_dir: ", sun_dir)
 
+    # img = generate_preetham_sky(H, W, T, sun_dir)
+    # write_exr(img, "preetham_sky_original_direction.exr")
+
     # Create random directory for output
     experiment_name = generate_slug(2)
     output_dir = Path(OUTPUT_DIR) / experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {output_dir}")
 
-    lon_deg = torch.tensor([19.74])
-    lat_deg = torch.tensor([-155.98])
+    lat_deg = torch.tensor([19.74])
+    lon_deg = torch.tensor([-155.98])
     SM = get_sm_rad_from_long_deg(lon_deg)
 
     count = 0
-    for J in tqdm(range(125, 175), desc="Generating Preetham sky"):
+    for J in tqdm(range(1), desc="Generating Preetham sky"):
         for ts in range(24):
-            t, theta_s, phi_s = spherical_coordinates_from_sun_position(J, ts, torch.deg2rad(lat_deg), torch.deg2rad(lon_deg), SM)
+            lat_radians = torch.deg2rad(lat_deg)
+            lon_radians = torch.deg2rad(lon_deg)
 
-            elev = theta_s
+            t, theta_s, phi_s = spherical_coordinates_from_sun_position(J, ts, lat_radians, lon_radians, SM)
+
+            elev = torch.pi/2.0 - torch.abs(theta_s)
             azim = phi_s
         
-            # print("elev: ", elev)
-            # print("azim: ", azim)
-
             spherical_coordinates = torch.stack([elev, azim], dim=-1)
-            # print(f"spherical_coordinates: {spherical_coordinates}, with shape: {spherical_coordinates.shape}")
-
             sun_dir = spherical_to_cartesian(spherical_coordinates)
-            # print("sun_dir: ", sun_dir)
+            sun_pixel = spherical_to_pixel(spherical_coordinates.unsqueeze(0), H, W).squeeze(0).squeeze(0)
+
+            print(
+                f"count: {count}, "
+                # f"lat_deg: {lat_deg}, lon_deg: {lon_deg}, "
+                # f"lat_radians: {lat_radians}, lon_radians: {lon_radians}, SM: {SM}, t: {t}, "
+                f"theta_s: {theta_s}, phi_s: {phi_s}, elev: {elev}, azim: {azim}, "
+                f"spherical_coordinates: {spherical_coordinates}, sun_dir: {sun_dir}, sun_pixel: {sun_pixel}"
+                # f"J: {J}, ts: {ts}"
+            )
+            print("-"*100)
 
             img = generate_preetham_sky(H, W, T, sun_dir)  # (H,W,3) linear sRGB
-        
+
+            # make a pink circle around sun_pixel
+            img = make_red_circle(img, sun_pixel, 10)
+
             # Write EXR to the random directory
             output_path = output_dir / f"preetham_hawaii_{count}.exr"
             write_exr(img, str(output_path))

@@ -47,19 +47,28 @@ def pixel_solid_angles(H:int, W:int, device: torch.device = None) -> tuple[torch
 
 def convert_theta(theta:torch.Tensor) -> torch.Tensor:
     """
-    Convert matlab theta definition to physics based theta definition.
+    Convert elevation angle to zenith angle (colatitude).
+    
+    Elevation angle: measured from horizontal plane, positive upward
+        - π/2 at zenith (straight up)
+        - 0 at horizon
+        - -π/2 at nadir (straight down)
+    
+    Zenith angle (colatitude): measured from z-axis downward
+        - 0 at zenith (straight up)
+        - π/2 at horizon
+        - π at nadir (straight down)
 
-    The polar angle θ is measured between the z-axis and the radial line r. aka Colatitude.
-
-    : params theta: (...)
-    : returns new_theta: (...)
+    : params theta: elevation angle in radians
+    : returns new_theta: zenith angle (colatitude) in radians
 
     Source:
     [11] definition
     [6] ImageYToTheta function
     """
-
-    new_theta = theta - torch.pi/2.0               # move from [pi/2 , -pi/2] --> [0, -pi]
+    
+    # Convert from elevation to zenith angle
+    new_theta = torch.pi/2.0 - theta
     return new_theta
 
 def generate_spherical_coordinates_map(H:int, W:int, device: torch.device = None) -> torch.Tensor:
