@@ -9,6 +9,9 @@ from functools import partial
 import torch
 from coolname import generate_slug
 
+import shutil
+import subprocess
+
 from src.LightingStudio.analysis.utils.io import read_exr, write_exr, find_hdri_files, exr_to_png_tensor
 from src.LightingStudio.analysis.core.median_cut import (
     median_cut_sampling,
@@ -32,6 +35,7 @@ from src.LightingStudio.analysis.core.sph import (
 )
 from src.LightingStudio.analysis.report.html_report import generate_html_report
 from src.LightingStudio.analysis.report.aggregate_statistics import generate_aggregate_statistics_html
+from src.LightingStudio.analysis.blender_interface.blender_renderer import process_hdri_with_blender
 
 OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
@@ -47,7 +51,8 @@ OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k_small" --n_samples 1024 --l_max 3 --png-only
 
-#
+# python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k_small_med" --n_samples 2 --l_max 3 --png-only --process 4
+
 # Process with specific number of parallel processes:
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 4
 #
@@ -94,10 +99,10 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         samples_cpu = median_cut_sampling_to_cpu(hdri, n_samples)
         timing['sampling'] = time.time() - start_time
         
-        # Time exact density map
-        start_time = time.time()
-        density_map_exact = expand_map_exact(hdri, samples_cpu, min_count=4, normalize=True)
-        timing['exact_density'] = time.time() - start_time
+        # # Time exact density map
+        # start_time = time.time()
+        # density_map_exact = expand_map_exact(hdri, samples_cpu, min_count=4, normalize=True)
+        # timing['exact_density'] = time.time() - start_time
         
         # Time fast density map
         start_time = time.time()
@@ -123,6 +128,17 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         start_time = time.time()
         sph_metrics_cpu = get_sph_metrics_cpu(hdri, l_max)
         timing['sph_metrics'] = time.time() - start_time
+
+
+        # Blender renderings - abstracted into dedicated module
+        start_time = time.time()
+        blender_success = process_hdri_with_blender(hdri_path, hdri_output_dir)
+        timing['blender_processing'] = time.time() - start_time
+        
+        if blender_success:
+            print("Blender processing completed successfully")
+        else:
+            print("Blender processing encountered errors")
 
         # Save images based on png_only flag
         web_dir = hdri_output_dir / "web"

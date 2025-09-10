@@ -472,7 +472,7 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
 
     # Get Solid Angle
     pixel_area, sin_theta = pixel_solid_angles(H, W, hdri.device) # (H, 1)
-    solid_angle = sin_theta * pixel_area
+    solid_angle = sin_theta # * pixel_area
 
     # # Integrate to get coefficients
     # sph_coeffs = torch.stack([

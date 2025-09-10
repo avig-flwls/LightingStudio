@@ -44,6 +44,33 @@ def generate_html_report(
             print(f"Warning: {png_path.name} not found")
             png_files[name] = None
     
+    # Check for Blender render images (person_0001 and person_0002)
+    blender_dir = hdri_output_dir / "blender_renders"
+    person_images = {}
+    
+    # Person 1 (person_0001) images
+    person1_views = ["front", "left", "right", "top", "bottom"]
+    person_images["person_0001"] = {}
+    for view in person1_views:
+        blender_img_path = blender_dir / f"person_0001_{view}.png"
+        if blender_img_path.exists():
+            person_images["person_0001"][view] = f"blender_renders/person_0001_{view}.png"
+            print(f"Found Blender render: person_0001_{view}.png")
+        else:
+            print(f"Warning: person_0001_{view}.png not found")
+            person_images["person_0001"][view] = None
+    
+    # Person 2 (person_0002) images
+    person_images["person_0002"] = {}
+    for view in person1_views:
+        blender_img_path = blender_dir / f"person_0002_{view}.png"
+        if blender_img_path.exists():
+            person_images["person_0002"][view] = f"blender_renders/person_0002_{view}.png"
+            print(f"Found Blender render: person_0002_{view}.png")
+        else:
+            print(f"Warning: person_0002_{view}.png not found")
+            person_images["person_0002"][view] = None
+    
     # Load analysis metrics if available
     metrics = {}
     
@@ -59,8 +86,14 @@ def generate_html_report(
         with open(sph_metrics_path, 'r') as f:
             metrics['sph'] = json.load(f)
     
+    # Load Blender render metrics
+    render_metrics_path = hdri_output_dir / "blender_renders" / "render_metrics.json"
+    if render_metrics_path.exists():
+        with open(render_metrics_path, 'r') as f:
+            metrics['render'] = json.load(f)
+    
     # Generate HTML content
-    html_content = _generate_html_template(hdri_name, png_files, metrics, hdri_list, hdri_output_dir)
+    html_content = _generate_html_template(hdri_name, png_files, metrics, hdri_list, hdri_output_dir, person_images)
     
     # Write HTML file
     html_path = hdri_output_dir / f"{hdri_name}_report.html"
@@ -76,32 +109,99 @@ def _generate_html_template(
     png_files: Dict[str, Optional[str]], 
     metrics: Dict,
     hdri_list: Optional[List[str]] = None,
-    hdri_output_dir: Optional[Path] = None
+    hdri_output_dir: Optional[Path] = None,
+    person_images: Optional[Dict] = None
 ) -> str:
     """Generate the HTML template with the analysis results."""
     
-    # Build the image gallery with 3 rows
+    # Initialize person_images if not provided
+    if person_images is None:
+        person_images = {"person_0001": {}, "person_0002": {}}
     
-    # Row 1: Original HDRI (really big)
-    original_row = ""
+    # Build the new layout:
+    # Row 1: Original HDRI on left, Person Images in cross formation on right
+    original_hdri_section = ""
     if png_files.get("original"):
-        original_row = f"""
-        <div class="original-container">
+        original_hdri_section = f"""
+        <div class="original-hdri-container">
             <h3>Original HDRI</h3>
             <img src="{png_files['original']}" alt="Original HDRI" onclick="openModal(this)">
             <p class="image-description">The original high dynamic range image</p>
         </div>
         """
     else:
-        original_row = f"""
-        <div class="original-container missing">
+        original_hdri_section = f"""
+        <div class="original-hdri-container missing">
             <h3>Original HDRI</h3>
             <div class="missing-image">Image not available</div>
             <p class="image-description">The original high dynamic range image</p>
         </div>
         """
     
-    # Row 2: Median Cut, Density Map, SPH Metrics
+    # Generate Person 1 cross layout (5 images in cross formation)
+    def generate_person_cross(person_key, person_name):
+        views = ["top", "left", "front", "right", "bottom"]
+        person_data = person_images.get(person_key, {})
+        
+        # Get individual view metrics if available
+        render_metrics = metrics.get('render', {})
+        
+        def get_view_with_metric(view):
+            intensity_key = f"{person_key}_{view}_intensity"
+            intensity_value = render_metrics.get(intensity_key, 0)
+            intensity_str = f"{intensity_value:.2f}" if intensity_value else "N/A"
+            
+            if person_data.get(view):
+                return f'''
+                <div class="cross-view-container">
+                    <img src="{person_data[view]}" alt="{person_name} {view.capitalize()}" onclick="openModal(this)">
+                    <div class="view-intensity">{intensity_str}</div>
+                </div>
+                '''
+            else:
+                return f'''
+                <div class="cross-view-container">
+                    <div class="missing-cross-image">{view.capitalize()}</div>
+                    <div class="view-intensity">{intensity_str}</div>
+                </div>
+                '''
+        
+        cross_html = f"""
+        <div class="person-cross-container">
+            <h4>{person_name}</h4>
+            <div class="cross-layout">
+                <div class="cross-top">
+                    {get_view_with_metric("top")}
+                </div>
+                <div class="cross-left">
+                    {get_view_with_metric("left")}
+                </div>
+                <div class="cross-center">
+                    {get_view_with_metric("front")}
+                </div>
+                <div class="cross-right">
+                    {get_view_with_metric("right")}
+                </div>
+                <div class="cross-bottom">
+                    {get_view_with_metric("bottom")}
+                </div>
+            </div>
+        </div>
+        """
+        return cross_html
+    
+    person1_cross = generate_person_cross("person_0001", "Person 1")
+    person2_cross = generate_person_cross("person_0002", "Person 2")
+    
+    # Combine persons side by side
+    persons_section = f"""
+    <div class="persons-container">
+        {person1_cross}
+        {person2_cross}
+    </div>
+    """
+    
+    # Row 2: Analysis images (moved under HDRI)
     analysis_row = ""
     analysis_configs = [
         ("median_cut", "Median Cut Sampling", "Visualization of median cut sampling points"),
@@ -272,6 +372,49 @@ def _generate_html_template(
             </div>
         </div>
         """
+    
+    # Generate person metrics section
+    person_metrics_section = ""
+    if metrics.get('render'):
+        render_metrics = metrics['render']
+        
+        # Person 1 metrics
+        person1_metrics = ""
+        person1_intensity = render_metrics.get('person_0001_intensity', 'N/A')
+        person1_intensity_str = f"{person1_intensity:.4f}" if isinstance(person1_intensity, (int, float)) else str(person1_intensity)
+        
+        person1_individual = []
+        for view in ["front", "left", "right", "top", "bottom"]:
+            key = f"person_0001_{view}_intensity"
+            value = render_metrics.get(key, 0)
+            person1_individual.append(f"{view.capitalize()}: {value:.3f}")
+        
+        person1_metrics = f"""
+        <div class="person-metrics">
+            <h4>Person 1 Metrics</h4>
+            <div class="metric">
+                <span class="metric-label">Average Intensity:</span>
+                <span class="metric-value">{person1_intensity_str}</span>
+            </div>
+        </div>
+        """
+        
+        # Person 2 metrics
+        person2_metrics = ""
+        person2_intensity = render_metrics.get('person_0002_intensity', 'N/A')
+        person2_intensity_str = f"{person2_intensity:.4f}" if isinstance(person2_intensity, (int, float)) else str(person2_intensity)
+        
+        person2_metrics = f"""
+        <div class="person-metrics">
+            <h4>Person 2 Metrics</h4>
+            <div class="metric">
+                <span class="metric-label">Average Intensity:</span>
+                <span class="metric-value">{person2_intensity_str}</span>
+            </div>
+        </div>
+        """
+        
+        person_metrics_section = person1_metrics + person2_metrics
     
     # Timing information section removed
     
@@ -700,6 +843,199 @@ def _generate_html_template(
             color: #bbb;
         }}
         
+        /* New layout styles */
+        .main-content-row {{
+            display: flex;
+            gap: 10px;
+            margin: 5px 0;
+        }}
+        
+        .original-hdri-container {{
+            text-align: center;
+            background: #ffffff;
+            padding: 5px;
+            border: 1px inset #c0c0c0;
+            flex: 2;
+        }}
+        
+        .original-hdri-container h3 {{
+            color: #000;
+            margin: 0 0 5px 0;
+            font-size: 1.0rem;
+            font-weight: bold;
+            background: #c0c0c0;
+            padding: 3px 5px;
+        }}
+        
+        .original-hdri-container img {{
+            max-width: 100%;
+            height: auto;
+            cursor: pointer;
+            border: 1px solid #808080;
+        }}
+        
+        .persons-container {{
+            display: flex;
+            gap: 5px;
+            flex: 1;
+            min-width: 300px;
+        }}
+        
+        .person-cross-container {{
+            background: #ffffff;
+            padding: 3px;
+            border: 1px inset #c0c0c0;
+            flex: 1;
+        }}
+        
+        .person-cross-container h4 {{
+            color: #000;
+            margin: 0 0 5px 0;
+            font-size: 0.9rem;
+            font-weight: bold;
+            background: #c0c0c0;
+            padding: 2px 3px;
+            text-align: center;
+        }}
+        
+        .cross-layout {{
+            display: grid;
+            grid-template-areas: 
+                ".     top    ."
+                "left  front  right"
+                ".     bottom .";
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 3px;
+            aspect-ratio: 1;
+            padding: 3px;
+        }}
+        
+        .cross-top {{ 
+            grid-area: top; 
+            justify-self: center;
+            align-self: center;
+        }}
+        .cross-left {{ 
+            grid-area: left;
+            justify-self: center;
+            align-self: center;
+        }}
+        .cross-center {{ 
+            grid-area: front;
+            justify-self: center;
+            align-self: center;
+        }}
+        .cross-right {{ 
+            grid-area: right;
+            justify-self: center;
+            align-self: center;
+        }}
+        .cross-bottom {{ 
+            grid-area: bottom;
+            justify-self: center;
+            align-self: center;
+        }}
+        
+        .cross-view-container {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }}
+        
+        .cross-layout img {{
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+            border: 1px solid #808080;
+            cursor: pointer;
+        }}
+        
+        .cross-layout img:hover {{
+            border: 1px solid #000;
+        }}
+        
+        .missing-cross-image {{
+            width: 80px;
+            height: 80px;
+            background: #e0e0e0;
+            border: 1px dashed #808080;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #404040;
+            font-size: 0.6rem;
+        }}
+        
+        .view-intensity {{
+            background: #f0f0f0;
+            border: 1px inset #c0c0c0;
+            padding: 1px 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.6rem;
+            color: #000;
+            text-align: center;
+            min-width: 40px;
+        }}
+        
+        .metrics-row {{
+            display: flex;
+            gap: 10px;
+            margin: 5px 0;
+        }}
+        
+        .hdri-metrics-section {{
+            background: #ffffff;
+            padding: 5px;
+            border: 1px inset #c0c0c0;
+            flex: 2;
+        }}
+        
+        .person-metrics-section {{
+            background: #ffffff;
+            padding: 5px;
+            border: 1px inset #c0c0c0;
+            flex: 1;
+        }}
+        
+        .hdri-metrics-section h3,
+        .person-metrics-section h3 {{
+            color: #000;
+            margin: 0 0 5px 0;
+            font-size: 0.9rem;
+            background: #c0c0c0;
+            padding: 2px 5px;
+            border: 1px outset #c0c0c0;
+            font-weight: bold;
+        }}
+        
+        .person-metrics {{
+            margin-bottom: 10px;
+        }}
+        
+        .person-metrics h4 {{
+            color: #000;
+            margin: 0 0 3px 0;
+            font-size: 0.8rem;
+            background: #e0e0e0;
+            padding: 2px 5px;
+            border: 1px outset #c0c0c0;
+            font-weight: bold;
+        }}
+        
+        .metric-value-small {{
+            font-family: 'Courier New', monospace;
+            font-weight: normal;
+            color: #000;
+            background: #f0f0f0;
+            padding: 1px 3px;
+            border: 1px inset #c0c0c0;
+            font-size: 0.6rem;
+            display: block;
+            margin-top: 2px;
+        }}
+        
         .footer {{
             text-align: center;
             color: #000;
@@ -711,13 +1047,17 @@ def _generate_html_template(
         }}
         
         @media (max-width: 768px) {{
-            .original-row {{
+            .main-content-row {{
                 flex-direction: column;
             }}
             
-            .metrics-sidebar {{
+            .metrics-row {{
+                flex-direction: column;
+            }}
+            
+            .persons-container {{
                 min-width: auto;
-                max-width: none;
+                flex-direction: column;
             }}
             
             .analysis-row {{
@@ -728,6 +1068,12 @@ def _generate_html_template(
             .sph-row {{
                 grid-template-columns: 1fr;
                 gap: 2px;
+            }}
+            
+            .cross-layout {{
+                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-rows: auto auto auto;
+                aspect-ratio: auto;
             }}
             
             .header h1 {{
@@ -749,12 +1095,21 @@ def _generate_html_template(
             <div class="section">
                 <h2>Analysis Visualizations</h2>
                 
-                <!-- Row 1: Original HDRI with Metrics Sidebar -->
-                <div class="original-row">
-                    {original_row}
-                    <div class="metrics-sidebar">
-                        <h2>Analysis Metrics</h2>
+                <!-- Row 1: HDRI and Person Renders -->
+                <div class="main-content-row">
+                    {original_hdri_section}
+                    {persons_section}
+                </div>
+                
+                <!-- Row 2: Metrics moved below HDRI -->
+                <div class="metrics-row">
+                    <div class="hdri-metrics-section">
+                        <h3>HDRI Analysis Metrics</h3>
                         {metrics_section}
+                    </div>
+                    <div class="person-metrics-section">
+                        <h3>Person Render Metrics</h3>
+                        {person_metrics_section}
                     </div>
                 </div>
                 
