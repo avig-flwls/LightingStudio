@@ -495,7 +495,7 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
             
             const layout = {
                 title: {
-                    text: this.config.title,
+                    text: '',  // Title now shown in HTML
                     font: {
                         size: 18,
                         color: '#2c3e50',
@@ -511,21 +511,21 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                         gridcolor: 'rgba(200, 200, 200, 0.3)',
                         zerolinecolor: 'rgba(200, 200, 200, 0.5)',
                         linecolor: 'rgba(200, 200, 200, 0.5)',
-                        tickfont: { size: 10, color: '#7f8c8d' }
+                        tickfont: { size: 12, color: '#7f8c8d' }
                     },
                     yaxis: {
                         ...this.config.yaxis,
                         gridcolor: 'rgba(200, 200, 200, 0.3)',
                         zerolinecolor: 'rgba(200, 200, 200, 0.5)',
                         linecolor: 'rgba(200, 200, 200, 0.5)',
-                        tickfont: { size: 10, color: '#7f8c8d' }
+                        tickfont: { size: 12, color: '#7f8c8d' }
                     },
                     zaxis: {
                         ...this.config.zaxis,
                         gridcolor: 'rgba(200, 200, 200, 0.3)',
                         zerolinecolor: 'rgba(200, 200, 200, 0.5)',
                         linecolor: 'rgba(200, 200, 200, 0.5)',
-                        tickfont: { size: 10, color: '#7f8c8d' }
+                        tickfont: { size: 12, color: '#7f8c8d' }
                     },
                     aspectmode: 'cube',
                     bgcolor: '#e3f2fd',
@@ -535,8 +535,10 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                     }
                 },
                 showlegend: false,
-                margin: { l: 0, r: 0, b: 20, t: 60 },
-                paper_bgcolor: '#f5f5f5',
+                margin: { l: 0, r: 0, b: 0, t: 0, pad: 0 },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                autosize: true,
                 hoverlabel: {
                     bgcolor: 'rgba(255, 255, 255, 0.95)',
                     bordercolor: 'rgba(0, 0, 0, 0.2)',
@@ -564,23 +566,32 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
             };
             
             this.plot = Plotly.newPlot(this.plotId, [trace], layout, config);
+            
+            // Force resize to fill container
+            window.addEventListener('resize', () => {
+                Plotly.Plots.resize(this.plotId);
+            });
+            
+            // Initial resize
+            setTimeout(() => {
+                Plotly.Plots.resize(this.plotId);
+            }, 100);
         }
         
         updateFiltering(filteredNames) {
-            // Update colors and opacity for better visual hierarchy
+            // Update colors and opacity - fully transparent for unselected
             const updatedColors = this.data.map((d, i) => {
                 if (!filteredNames.includes(d.name)) {
-                    // Make unselected points very subtle gray
-                    return 'rgba(150, 150, 150, 0.3)';
+                    return 'rgba(0, 0, 0, 0)';  // Completely transparent
                 }
-                return this.originalColors[i];
+                return this.originalColors[i];  // Keep original color
             });
             
             const updatedOpacities = this.data.map(d => {
-                return filteredNames.includes(d.name) ? 0.9 : 0.15;
+                return filteredNames.includes(d.name) ? 1.0 : 0.0;  // Full opacity for selected, none for unselected
             });
             
-            // Update only colors and opacity, not size
+            // Update both colors and opacity
             Plotly.restyle(this.plotId, {
                 'marker.color': [updatedColors],
                 'marker.opacity': [updatedOpacities]
@@ -591,7 +602,7 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
             // Reset to original colors and opacity
             Plotly.restyle(this.plotId, {
                 'marker.color': [this.originalColors],
-                'marker.opacity': 0.9
+                'marker.opacity': 0.9  // Back to original opacity
             });
         }
     }
@@ -692,6 +703,15 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
         if (window.dcColor3DManager) window.dcColor3DManager.initialize();
         if (window.dominantColor3DManager) window.dominantColor3DManager.initialize();
         if (window.dominantDirection3DManager) window.dominantDirection3DManager.initialize();
+        
+        // Force all plots to resize after initialization
+        setTimeout(() => {
+            ['globalColor3D', 'dcColor3D', 'dominantColor3D', 'dominantDirection3D'].forEach(id => {
+                if (document.getElementById(id)) {
+                    Plotly.Plots.resize(id);
+                }
+            });
+        }, 200);
     }
     """)
     if js_code:
@@ -1010,8 +1030,10 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         
         // Set up brush selection after a small delay to ensure charts are rendered
         setTimeout(() => {
-            setupBrushSelection();
-        }, 200);
+        setupBrushSelection();
+            // Setup direction filtering after 3D plots are initialized
+            setupDirectionFiltering();
+        }, 300);
     });
     
     // Brush selection setup
@@ -1118,7 +1140,7 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
             // Get chart area bounds to constrain selection
             const chart = window.globalIntensityChart;
             if (chart && chart.chartArea) {
-                const rect = canvas.getBoundingClientRect();
+            const rect = canvas.getBoundingClientRect();
                 const canvasOffsetX = rect.left - containerRect.left;
                 const chartArea = chart.chartArea;
                 
@@ -1195,49 +1217,27 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
     
     // Apply filter function
     function applyFilter(minIntensity, maxIntensity) {
-        filteredData = allData.filter(row => {
-            return row.global_intensity >= minIntensity && row.global_intensity <= maxIntensity;
-        });
+        currentIntensityRange = { min: minIntensity, max: maxIntensity };
         
         // Update range display
         document.getElementById('selection-range').textContent = minIntensity.toFixed(3) + ' - ' + maxIntensity.toFixed(3);
         
-        // Update status
-        const statusElement = document.getElementById('chart-status');
-        if (statusElement) {
-            statusElement.textContent = 'Filtered: ' + filteredData.length + ' HDRIs';
-            statusElement.style.color = '#4CAF50';
-        }
-        
-        // Update all charts
-        updateAllChartsWithFilter();
-        
-        // Update individual reports list
-        const currentSearchTerm = document.getElementById('hdri-search')?.value?.toLowerCase() || '';
-        filterHDRILinks(currentSearchTerm);
+        // Apply combined filters
+        applyCombinedFilters();
     }
     
     // Clear filter function
     function clearFilter() {
-        filteredData = [...allData];
+        currentIntensityRange = null;
         
         // Remove visual selection
         const selections = document.querySelectorAll('.brush-selection');
-        selections.forEach(sel => sel.remove());
+            selections.forEach(sel => sel.remove());
         
         document.getElementById('selection-range').textContent = 'Full Range';
         
-        const statusElement = document.getElementById('chart-status');
-        if (statusElement) {
-            statusElement.textContent = 'Showing all ' + allData.length + ' HDRIs';
-            statusElement.style.color = '#666';
-        }
-        
-        updateAllChartsWithFilter();
-        
-        // Update individual reports list
-        const currentSearchTerm = document.getElementById('hdri-search')?.value?.toLowerCase() || '';
-        filterHDRILinks(currentSearchTerm);
+        // Apply combined filters
+        applyCombinedFilters();
     }
     
     // Update all charts with filtered data
@@ -1332,6 +1332,501 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         chart.data.labels = labels;
         chart.update();
     }
+    
+    // Filter states
+    let currentIntensityRange = null;
+    let directionFilterActive = false;
+    let directionFilterCenter = null;
+    let directionFilterRadius = 0.5;
+    let directionFilteredData = [];
+    
+    // Setup direction filtering for dominant light direction plot
+    function setupDirectionFiltering() {
+        if (!window.dominantDirection3DData) return;
+        
+        // Find the 3D plots section
+        const plotsSection = document.querySelector('.intensity-section:has(#dominantDirection3D)');
+        if (!plotsSection) return;
+        
+        // Create a wrapper for the plots grid and controls
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display: flex; gap: 20px; align-items: start;';
+        
+        // Move the existing grid into the wrapper
+        const gridContainer = plotsSection.querySelector('div[style*="grid"]');
+        wrapper.appendChild(gridContainer);
+        
+        // Create control panel on the right matching intensity filter style
+        const controlPanel = document.createElement('div');
+        controlPanel.id = 'direction-filter-controls';
+        controlPanel.style.cssText = `
+            background: #f8f8f8;
+            padding: 15px;
+            border: 1px inset #c0c0c0;
+            width: 280px;
+            flex-shrink: 0;
+            font-family: 'Courier New', monospace;
+        `;
+        
+        controlPanel.innerHTML = `
+            <div style="background: #e0e0e0; color: #000; padding: 5px; margin: -15px -15px 15px -15px; border: 1px outset #c0c0c0; font-weight: bold;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 14px;">🎯 Direction Filter</span>
+                    <button id="clear-direction-filter" style="padding: 2px 10px; background: #f0f0f0; color: #000; border: 1px outset #c0c0c0; font-family: 'Courier New', monospace; font-size: 11px; cursor: pointer;">Clear</button>
+                </div>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: #000; font-weight: bold; font-size: 12px;">
+                    Azimuth (θ): <span id="azimuth-value" style="font-weight: normal; color: #0066cc;">0°</span>
+                </label>
+                <input type="range" id="filter-azimuth" min="-180" max="180" step="5" value="0" style="width: 100%; height: 20px; cursor: pointer;">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: #000; font-weight: bold; font-size: 12px;">
+                    Elevation (φ): <span id="elevation-value" style="font-weight: normal; color: #0066cc;">0°</span>
+                </label>
+                <input type="range" id="filter-elevation" min="-90" max="90" step="5" value="0" style="width: 100%; height: 20px; cursor: pointer;">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: #000; font-weight: bold; font-size: 12px;">
+                    Width: <span id="cone-width-value" style="font-weight: normal; color: #0066cc;">30°</span>
+                </label>
+                <input type="range" id="filter-cone-width" min="5" max="90" step="5" value="30" style="width: 100%; height: 20px; cursor: pointer;">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: #000; font-weight: bold; font-size: 12px;">
+                    Height: <span id="cone-height-value" style="font-weight: normal; color: #0066cc;">30°</span>
+                </label>
+                <input type="range" id="filter-cone-height" min="5" max="90" step="5" value="30" style="width: 100%; height: 20px; cursor: pointer;">
+            </div>
+            <div id="direction-filter-status" style="margin-top: 15px; padding: 8px; background: #fff; border: 1px inset #c0c0c0; font-size: 12px; color: #666; text-align: center; border-radius: 2px;">
+                Move sliders to select a direction cone
+            </div>
+        `;
+        
+        // Add control panel to wrapper
+        wrapper.appendChild(controlPanel);
+        
+        // Insert wrapper after the h2
+        const h2 = plotsSection.querySelector('h2');
+        h2.parentNode.insertBefore(wrapper, h2.nextSibling);
+        
+        // Spherical filter parameters
+        let azimuth = 0;    // -180 to 180 degrees
+        let elevation = 0;  // -90 to 90 degrees  
+        let coneWidth = 30; // cone width in degrees
+        let coneHeight = 30; // cone height in degrees
+        
+        // Handle azimuth slider
+        const azimuthSlider = document.getElementById('filter-azimuth');
+        const azimuthValue = document.getElementById('azimuth-value');
+        azimuthSlider.addEventListener('input', (e) => {
+            azimuth = parseFloat(e.target.value);
+            azimuthValue.textContent = azimuth + '°';
+            updateDirectionFilter();
+        });
+        
+        // Handle elevation slider
+        const elevationSlider = document.getElementById('filter-elevation');
+        const elevationValue = document.getElementById('elevation-value');
+        elevationSlider.addEventListener('input', (e) => {
+            elevation = parseFloat(e.target.value);
+            elevationValue.textContent = elevation + '°';
+            updateDirectionFilter();
+        });
+        
+        // Handle cone width slider
+        const coneWidthSlider = document.getElementById('filter-cone-width');
+        const coneWidthValue = document.getElementById('cone-width-value');
+        coneWidthSlider.addEventListener('input', (e) => {
+            coneWidth = parseFloat(e.target.value);
+            coneWidthValue.textContent = coneWidth + '°';
+            updateDirectionFilter();
+        });
+        
+        // Handle cone height slider
+        const coneHeightSlider = document.getElementById('filter-cone-height');
+        const coneHeightValue = document.getElementById('cone-height-value');
+        coneHeightSlider.addEventListener('input', (e) => {
+            coneHeight = parseFloat(e.target.value);
+            coneHeightValue.textContent = coneHeight + '°';
+            updateDirectionFilter();
+        });
+        
+        // Handle clear button
+        const clearBtn = document.getElementById('clear-direction-filter');
+        clearBtn.addEventListener('click', clearDirectionFilter);
+        
+        // Button hover effect
+        clearBtn.addEventListener('mousedown', function() {
+            this.style.border = '1px inset #c0c0c0';
+            this.style.background = '#e0e0e0';
+        });
+        clearBtn.addEventListener('mouseup', function() {
+            this.style.border = '1px outset #c0c0c0';
+            this.style.background = '#f0f0f0';
+        });
+        clearBtn.addEventListener('mouseleave', function() {
+            this.style.border = '1px outset #c0c0c0';
+            this.style.background = '#f0f0f0';
+        });
+        clearBtn.addEventListener('mouseenter', function() {
+            this.style.background = '#f8f8f8';
+        });
+        
+        // Store filter parameters globally
+        window.directionFilterParams = {
+            getAzimuth: () => azimuth,
+            getElevation: () => elevation,
+            getConeWidth: () => coneWidth,
+            getConeHeight: () => coneHeight
+        };
+    }
+    
+    function updateDirectionFilter() {
+        if (!window.directionFilterParams) return;
+        
+        const azimuth = window.directionFilterParams.getAzimuth();
+        const elevation = window.directionFilterParams.getElevation();
+        const coneWidth = window.directionFilterParams.getConeWidth();
+        const coneHeight = window.directionFilterParams.getConeHeight();
+        
+        // Convert spherical to Cartesian for the cone center direction
+        const azimuthRad = azimuth * Math.PI / 180;
+        const elevationRad = elevation * Math.PI / 180;
+        
+        // Spherical to Cartesian conversion
+        const centerX = Math.cos(elevationRad) * Math.cos(azimuthRad);
+        const centerY = Math.cos(elevationRad) * Math.sin(azimuthRad);
+        const centerZ = Math.sin(elevationRad);
+        
+        // Calculate perpendicular vectors for elliptical cone
+        let perpX, perpY, perpZ;
+        if (Math.abs(centerZ) < 0.9) {
+            perpX = -centerY;
+            perpY = centerX;
+            perpZ = 0;
+        } else {
+            perpX = 0;
+            perpY = -centerZ;
+            perpZ = centerY;
+        }
+        
+        // Normalize
+        const perpMag = Math.sqrt(perpX*perpX + perpY*perpY + perpZ*perpZ);
+        if (perpMag > 0) {
+            perpX /= perpMag;
+            perpY /= perpMag;
+            perpZ /= perpMag;
+        }
+        
+        // Second perpendicular via cross product
+        const perp2X = centerY * perpZ - centerZ * perpY;
+        const perp2Y = centerZ * perpX - centerX * perpZ;
+        const perp2Z = centerX * perpY - centerY * perpX;
+        
+        // Filter data based on elliptical cone
+        directionFilteredData = allData.filter(row => {
+            const dirData = window.dominantDirection3DData.find(d => d.name === row.hdri_name);
+            if (!dirData) return false;
+            
+            // Project vector onto cone coordinate system
+            const alongAxis = dirData.x * centerX + dirData.y * centerY + dirData.z * centerZ;
+            const alongWidth = dirData.x * perpX + dirData.y * perpY + dirData.z * perpZ;
+            const alongHeight = dirData.x * perp2X + dirData.y * perp2Y + dirData.z * perp2Z;
+            
+            // Check if within elliptical cone
+            if (alongAxis <= 0) return false; // Behind cone
+            
+            const widthAngle = Math.atan2(Math.abs(alongWidth), alongAxis) * 180 / Math.PI;
+            const heightAngle = Math.atan2(Math.abs(alongHeight), alongAxis) * 180 / Math.PI;
+            
+            // Elliptical check
+            const widthRatio = widthAngle / coneWidth;
+            const heightRatio = heightAngle / coneHeight;
+            
+            return (widthRatio * widthRatio + heightRatio * heightRatio) <= 1;
+        });
+        
+        // Update status
+        const status = document.getElementById('direction-filter-status');
+        if (directionFilteredData.length > 0) {
+            directionFilterActive = true;
+            status.textContent = `Selected: ${directionFilteredData.length} HDRIs within elliptical cone`;
+            status.style.color = '#28a745';
+        } else {
+            status.textContent = 'No HDRIs in selected cone';
+            status.style.color = '#dc3545';
+        }
+        
+        // Update visualization to show selection cone
+        addSelectionEllipticalCone(centerX, centerY, centerZ, coneWidth, coneHeight, perpX, perpY, perpZ, perp2X, perp2Y, perp2Z);
+        
+        // Apply combined filters
+        applyCombinedFilters();
+    }
+    
+    function addSelectionEllipticalCone(centerX, centerY, centerZ, coneWidth, coneHeight, perpX, perpY, perpZ, perp2X, perp2Y, perp2Z) {
+        // Generate elliptical cone visualization
+        const ellipseLines = generateEllipticalConeLines(centerX, centerY, centerZ, coneWidth, coneHeight, perpX, perpY, perpZ, perp2X, perp2Y, perp2Z);
+        
+        // Create line trace for cone visualization
+        const coneTrace = {
+            type: 'scatter3d',
+            mode: 'lines',
+            x: ellipseLines.x,
+            y: ellipseLines.y,
+            z: ellipseLines.z,
+            line: {
+                color: 'rgb(100, 150, 255)',
+                width: 3
+            },
+            opacity: 0.6,
+            hoverinfo: 'skip',
+            showlegend: false
+        };
+        
+        // Remove old cone traces if any
+        const plotDiv = document.getElementById('dominantDirection3D');
+        if (plotDiv.data && plotDiv.data.length > 1) {
+            while (plotDiv.data.length > 1) {
+                Plotly.deleteTraces('dominantDirection3D', [1]);
+            }
+        }
+        
+        // Add new cone trace
+        Plotly.addTraces('dominantDirection3D', [coneTrace]);
+    }
+    
+    function generateEllipticalConeLines(cx, cy, cz, widthAngle, heightAngle, perpX, perpY, perpZ, perp2X, perp2Y, perp2Z) {
+        const x = [], y = [], z = [];
+        const widthRad = widthAngle * Math.PI / 180;
+        const heightRad = heightAngle * Math.PI / 180;
+        
+        // Create elliptical base on unit sphere
+        const numPoints = 32;
+        
+        for (let i = 0; i <= numPoints; i++) {
+            const t = (i / numPoints) * 2 * Math.PI;
+            const cosT = Math.cos(t);
+            const sinT = Math.sin(t);
+            
+            // Elliptical radius at this angle
+            const ellipseAngle = Math.atan2(
+                Math.abs(sinT) * heightRad,
+                Math.abs(cosT) * widthRad
+            );
+            
+            // Point on elliptical cone base
+            const baseX = cx * Math.cos(ellipseAngle) + 
+                         (perpX * cosT * Math.tan(widthRad) + perp2X * sinT * Math.tan(heightRad)) * Math.sin(ellipseAngle);
+            const baseY = cy * Math.cos(ellipseAngle) + 
+                         (perpY * cosT * Math.tan(widthRad) + perp2Y * sinT * Math.tan(heightRad)) * Math.sin(ellipseAngle);
+            const baseZ = cz * Math.cos(ellipseAngle) + 
+                         (perpZ * cosT * Math.tan(widthRad) + perp2Z * sinT * Math.tan(heightRad)) * Math.sin(ellipseAngle);
+            
+            // Normalize to unit sphere
+            const mag = Math.sqrt(baseX*baseX + baseY*baseY + baseZ*baseZ);
+            if (mag > 0) {
+                x.push(baseX/mag);
+                y.push(baseY/mag);
+                z.push(baseZ/mag);
+            }
+        }
+        
+        // Add lines from origin to ellipse at cardinal points
+        const cardinalPoints = [0, Math.floor(numPoints/4), Math.floor(numPoints/2), Math.floor(3*numPoints/4)];
+        for (const idx of cardinalPoints) {
+            x.push(null); y.push(null); z.push(null); // Break line
+            x.push(0); y.push(0); z.push(0); // Origin
+            x.push(x[idx]); y.push(y[idx]); z.push(z[idx]); // Point on ellipse
+        }
+        
+        return { x, y, z };
+    }
+    
+    function addSelectionCone(centerX, centerY, centerZ, coneAngle) {
+        // Generate cone visualization lines (lightweight approach)
+        const coneLines = generateConeLines(centerX, centerY, centerZ, coneAngle);
+        
+        // Create line trace for cone visualization
+        const coneTrace = {
+            type: 'scatter3d',
+            mode: 'lines',
+            x: coneLines.x,
+            y: coneLines.y,
+            z: coneLines.z,
+            line: {
+                color: 'rgb(100, 150, 255)',
+                width: 3
+            },
+            opacity: 0.6,
+            hoverinfo: 'skip',
+            showlegend: false
+        };
+        
+        // Remove old cone traces if any
+        const plotDiv = document.getElementById('dominantDirection3D');
+        if (plotDiv.data && plotDiv.data.length > 1) {
+            // Keep only the main data trace
+            while (plotDiv.data.length > 1) {
+                Plotly.deleteTraces('dominantDirection3D', [1]);
+            }
+        }
+        
+        // Add new cone trace
+        Plotly.addTraces('dominantDirection3D', [coneTrace]);
+    }
+    
+    function generateConeLines(cx, cy, cz, coneAngle) {
+        const x = [], y = [], z = [];
+        const coneAngleRad = coneAngle * Math.PI / 180;
+        
+        // Create circular base of cone on unit sphere
+        const numPoints = 24;
+        
+        // Find two perpendicular vectors to the cone axis
+        let perpX, perpY, perpZ;
+        if (Math.abs(cz) < 0.9) {
+            // Use z-axis as reference
+            perpX = -cy;
+            perpY = cx;
+            perpZ = 0;
+        } else {
+            // Use x-axis as reference
+            perpX = 0;
+            perpY = -cz;
+            perpZ = cy;
+        }
+        
+        // Normalize perpendicular vector
+        const perpMag = Math.sqrt(perpX*perpX + perpY*perpY + perpZ*perpZ);
+        if (perpMag > 0) {
+            perpX /= perpMag;
+            perpY /= perpMag;
+            perpZ /= perpMag;
+        }
+        
+        // Get second perpendicular vector via cross product
+        const perp2X = cy * perpZ - cz * perpY;
+        const perp2Y = cz * perpX - cx * perpZ;
+        const perp2Z = cx * perpY - cy * perpX;
+        
+        // Draw cone outline
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = (i / numPoints) * 2 * Math.PI;
+            const cosAngle = Math.cos(angle);
+            const sinAngle = Math.sin(angle);
+            
+            // Point on cone base circle
+            const baseX = cx * Math.cos(coneAngleRad) + 
+                         (perpX * cosAngle + perp2X * sinAngle) * Math.sin(coneAngleRad);
+            const baseY = cy * Math.cos(coneAngleRad) + 
+                         (perpY * cosAngle + perp2Y * sinAngle) * Math.sin(coneAngleRad);
+            const baseZ = cz * Math.cos(coneAngleRad) + 
+                         (perpZ * cosAngle + perp2Z * sinAngle) * Math.sin(coneAngleRad);
+            
+            // Normalize to unit sphere
+            const mag = Math.sqrt(baseX*baseX + baseY*baseY + baseZ*baseZ);
+            x.push(baseX/mag);
+            y.push(baseY/mag);
+            z.push(baseZ/mag);
+        }
+        
+        // Add lines from center to a few points on the circle
+        for (let i = 0; i < 4; i++) {
+            const idx = Math.floor(i * numPoints / 4);
+            x.push(null); y.push(null); z.push(null); // Break line
+            x.push(0); y.push(0); z.push(0); // Origin
+            x.push(x[idx]); y.push(y[idx]); z.push(z[idx]); // Point on circle
+        }
+        
+        return { x, y, z };
+    }
+    
+    function clearDirectionFilter() {
+        directionFilterActive = false;
+        directionFilteredData = [];
+        
+        // Reset sliders
+        document.getElementById('filter-azimuth').value = 0;
+        document.getElementById('filter-elevation').value = 0;
+        document.getElementById('filter-cone-width').value = 30;
+        document.getElementById('filter-cone-height').value = 30;
+        document.getElementById('azimuth-value').textContent = '0°';
+        document.getElementById('elevation-value').textContent = '0°';
+        document.getElementById('cone-width-value').textContent = '30°';
+        document.getElementById('cone-height-value').textContent = '30°';
+        
+        // Update status
+        document.getElementById('direction-filter-status').textContent = 'Move sliders to select a direction cone';
+        document.getElementById('direction-filter-status').style.color = '#6c757d';
+        
+        // Remove cone trace
+        const plotDiv = document.getElementById('dominantDirection3D');
+        if (plotDiv.data && plotDiv.data.length > 1) {
+            while (plotDiv.data.length > 1) {
+                Plotly.deleteTraces('dominantDirection3D', [1]);
+            }
+        }
+        
+        applyCombinedFilters();
+    }
+    
+    function applyCombinedFilters() {
+        // Combine intensity and direction filters with AND logic
+        let combinedFilteredData = allData;
+        
+        // Apply intensity filter if active
+        if (currentIntensityRange) {
+            combinedFilteredData = combinedFilteredData.filter(row => 
+                row.global_intensity >= currentIntensityRange.min && 
+                row.global_intensity <= currentIntensityRange.max
+            );
+        }
+        
+        // Apply direction filter if active
+        if (directionFilterActive && directionFilteredData.length > 0) {
+            const directionNames = directionFilteredData.map(d => d.hdri_name);
+            combinedFilteredData = combinedFilteredData.filter(row => 
+                directionNames.includes(row.hdri_name)
+            );
+        }
+        
+        // Update global filtered data
+        filteredData = combinedFilteredData;
+        
+        // Update all visualizations
+        updateAllChartsWithFilter();
+        update3DVisualizations();
+        
+        // Update individual reports list
+        const currentSearchTerm = document.getElementById('hdri-search')?.value?.toLowerCase() || '';
+        filterHDRILinks(currentSearchTerm);
+        
+        // Update status
+        const statusElement = document.getElementById('chart-status');
+        if (statusElement) {
+            if (filteredData.length < allData.length) {
+                statusElement.textContent = 'Filtered: ' + filteredData.length + ' HDRIs';
+                statusElement.style.color = '#4CAF50';
+            } else {
+                statusElement.textContent = 'Showing all ' + allData.length + ' HDRIs';
+                statusElement.style.color = '#666';
+            }
+        }
+        
+        // Update filter indicator
+        const hasFilters = currentIntensityRange || directionFilterActive;
+        document.getElementById('intensity-filter-indicator').style.display = hasFilters ? 'inline' : 'none';
+        if (hasFilters) {
+            const filterTexts = [];
+            if (currentIntensityRange) filterTexts.push('Intensity');
+            if (directionFilterActive) filterTexts.push('Direction');
+            document.getElementById('intensity-filter-indicator').textContent = `Filters: ${filterTexts.join(' & ')}`;
+        }
+    }
+    
     
     // Update 3D visualizations
     function update3DVisualizations() {
@@ -1763,6 +2258,18 @@ def generate_html_template(
         display: block;
     }}
     
+    /* Special styling for 3D plot containers */
+    .chart-container:has([id$="3D"]) {{
+        padding: 2px;
+        background: #e3f2fd;
+        margin-bottom: 10px;
+    }}
+    
+    .chart-container > div[id$="3D"] {{
+        width: 100% !important;
+        height: 100% !important;
+    }}
+    
     .chart-controls {{
         margin-top: 10px;
         text-align: center;
@@ -1933,18 +2440,24 @@ def generate_html_template(
     </div>
 
     <div class="intensity-section">
-        <h2>3D Color Distribution (RGB)</h2>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px;">
-            <div class="chart-container"><div id="globalColor3D" style="height:400px;"></div></div>
-            <div class="chart-container"><div id="dcColor3D" style="height:400px;"></div></div>
-            <div class="chart-container"><div id="dominantColor3D" style="height:400px;"></div></div>
-        </div>
-    </div>
-
-    <div class="intensity-section">
-        <h2>Dominant Light Direction</h2>
-        <div class="chart-container" style="max-width:600px; margin:0 auto;">
-            <div id="dominantDirection3D" style="height:500px;"></div>
+        <h2>3D Color & Light Direction Analysis</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%;">
+            <div class="chart-container" style="height:350px;">
+                <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Dominant Color</h3>
+                <div id="dominantColor3D" style="height:calc(100% - 20px);"></div>
+            </div>
+            <div class="chart-container" style="height:350px;">
+                <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Dominant Light Direction</h3>
+                <div id="dominantDirection3D" style="height:calc(100% - 20px);"></div>
+            </div>
+            <div class="chart-container" style="height:350px;">
+                <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Global Color</h3>
+                <div id="globalColor3D" style="height:calc(100% - 20px);"></div>
+            </div>
+            <div class="chart-container" style="height:350px;">
+                <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">DC Color</h3>
+                <div id="dcColor3D" style="height:calc(100% - 20px);"></div>
+            </div>
         </div>
     </div>
 
