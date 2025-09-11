@@ -472,7 +472,9 @@ def project_env_to_coefficients(hdri: torch.Tensor, l_max:int) -> tuple[torch.Te
 
     # Get Solid Angle
     pixel_area, sin_theta = pixel_solid_angles(H, W, hdri.device) # (H, 1)
-    solid_angle = sin_theta # * pixel_area
+    # solid_angle = sin_theta * pixel_area
+    solid_angle = torch.ones_like(sin_theta)
+
 
     # # Integrate to get coefficients
     # sph_coeffs = torch.stack([
@@ -538,12 +540,17 @@ def reconstruct_sph_coeffs_to_env(H:int, W:int, sph_coeffs: torch.Tensor, sph_ba
     n_terms, _ = sph_coeffs.shape
     l_max = sph_l_max_from_indices_total(n_terms)
 
+    # Get Solid Angle
+    pixel_area, sin_theta = pixel_solid_angles(H, W, sph_coeffs.device) # (H, 1)
+    # solid_angle = sin_theta * pixel_area
+    solid_angle = torch.ones_like(sin_theta)
+
     # Compute cumulative irradiance maps (reconstruction up to each l_max)
     irradiance_maps = torch.zeros((l_max + 1, H, W, 3), device=sph_coeffs.device, dtype=sph_coeffs.dtype)
     for l in range(l_max + 1):  # noqa: E741
         curr_n_terms = sph_indices_total(l)
         # This gives cumulative reconstruction from l=0 to l=l
-        irradiance_map = einsum(sph_basis[..., 0:curr_n_terms], sph_coeffs[0:curr_n_terms, ...], "h w n_terms, n_terms c -> h w c") 
+        irradiance_map = einsum(sph_basis[..., 0:curr_n_terms], sph_coeffs[0:curr_n_terms, ...], "h w n_terms, n_terms c -> h w c") / solid_angle[..., None] # TODO: Hack divide by solid angle to normalize the irradiance map??
         irradiance_maps[l, ...] = irradiance_map
         
     return irradiance_maps

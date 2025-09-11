@@ -129,17 +129,6 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         sph_metrics_cpu = get_sph_metrics_cpu(hdri, l_max)
         timing['sph_metrics'] = time.time() - start_time
 
-
-        # Blender renderings - abstracted into dedicated module
-        start_time = time.time()
-        blender_success = process_hdri_with_blender(hdri_path, hdri_output_dir)
-        timing['blender_processing'] = time.time() - start_time
-        
-        if blender_success:
-            print("Blender processing completed successfully")
-        else:
-            print("Blender processing encountered errors")
-
         # Save images based on png_only flag
         web_dir = hdri_output_dir / "web"
         web_dir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +171,16 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         sph_metrics_dict = sph_metrics_cpu.to_dict()
         with open(hdri_output_dir / f"{hdri_path.stem}_sph_metrics.json", "w") as f:
             json.dump(sph_metrics_dict, f, indent=2)
+
+        # Blender renderings - abstracted into dedicated module
+        start_time = time.time()
+        blender_success = process_hdri_with_blender(hdri_path, hdri_output_dir)
+        timing['blender_processing'] = time.time() - start_time
+        
+        if blender_success:
+            print("Blender processing completed successfully")
+        else:
+            print("Blender processing encountered errors")
 
         # Generate HTML Report
         html_path = generate_html_report(hdri_output_dir, hdri_path.stem, hdri_names)

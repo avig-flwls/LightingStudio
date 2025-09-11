@@ -468,7 +468,7 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                     type: 'scatter3d',
                     text: data.map(d => d.name),
                     marker: {{
-                        size: 12,
+                        size: 10,
                         color: data.map(d => `rgb(${{d.r}},${{d.g}},${{d.b}})`),
                         line: {{ color: 'black', width: 1 }}
                     }},
@@ -481,9 +481,10 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                         y: 0.95
                     }},
                     scene: {{
-                        xaxis: {{ title: 'Red', range: [0, 255] }},
-                        yaxis: {{ title: 'Green', range: [0, 255] }},
-                        zaxis: {{ title: 'Blue', range: [0, 255] }},
+                        xaxis: {{ title: 'Red', range: [0, 255], dtick: 50, showgrid: true }},
+                        yaxis: {{ title: 'Green', range: [0, 255], dtick: 50, showgrid: true }},
+                        zaxis: {{ title: 'Blue', range: [0, 255], dtick: 50, showgrid: true }},
+                        aspectmode: 'cube',
                         bgcolor: 'rgb(230, 240, 250)'  // Light blue background
                     }},
                     showlegend: false,
@@ -509,7 +510,7 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                 type: 'scatter3d',
                 text: data.map(d => d.name),
                 marker: {{
-                    size: 14,
+                    size: 11,
                     color: data.map(d => `rgb(${{d.color[0]}},${{d.color[1]}},${{d.color[2]}})`),
                     line: {{ color: 'black', width: 1 }}
                 }},
@@ -523,9 +524,9 @@ def generate_3d_plot_js(viz_data: Dict) -> str:
                     y: 0.95
                 }},
                     scene: {{
-                        xaxis: {{ title: 'X', range: [-1, 1] }},
-                        yaxis: {{ title: 'Y', range: [-1, 1] }},
-                        zaxis: {{ title: 'Z', range: [-1, 1] }},
+                        xaxis: {{ title: 'X', range: [-1, 1], dtick: 0.5, showgrid: true }},
+                        yaxis: {{ title: 'Y', range: [-1, 1], dtick: 0.5, showgrid: true }},
+                        zaxis: {{ title: 'Z', range: [-1, 1], dtick: 0.5, showgrid: true }},
                         aspectmode: 'cube',
                         bgcolor: 'rgb(230, 240, 250)'  // Light blue background
                     }},
@@ -618,8 +619,8 @@ def generate_chart_js(viz_data: Dict, stats: Dict) -> str:
                 plugins: {{
                     title: {{ display: true, text: 'Area Intensity Distribution (RGB)' }}
                 }}
-            }}
-        }});
+        }}
+    }});
         """)
     
     # Person average intensity chart
@@ -760,8 +761,8 @@ def generate_chart_js(viz_data: Dict, stats: Dict) -> str:
                         plugins: {{
                             title: {{ display: true, text: 'Person 2 - Directional Intensity Distribution' }}
                         }}
-                    }}
-                }});
+            }}
+        }});
                 """)
     
     # Generate 3D visualization data
@@ -852,8 +853,10 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
             personIntensityRanges.person2Directional.max = Math.max(...person2DirectionalData);
         }
         
-        // Set up brush selection
-        setupBrushSelection();
+        // Set up brush selection after a small delay to ensure charts are rendered
+        setTimeout(() => {
+            setupBrushSelection();
+        }, 200);
     });
     
     // Brush selection setup
@@ -861,86 +864,168 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         const canvas = document.getElementById('globalIntensityChart');
         if (!canvas || !canvas.parentElement) return;
         
+        // Ensure the chart is ready and has a chart area
+        const chart = window.globalIntensityChart;
+        if (!chart || !chart.chartArea) {
+            console.warn('Chart not ready for brush selection, retrying...');
+            setTimeout(setupBrushSelection, 100);
+            return;
+        }
+        
         const chartContainer = canvas.parentElement;
         chartContainer.style.position = 'relative';
         
-        // Create overlay
-        const overlay = document.createElement('div');
-        overlay.id = 'intensity-brush-overlay';
-        overlay.style.position = 'absolute';
-        overlay.style.top = '0';
-        overlay.style.left = '0';
-        overlay.style.width = '100%';
-        overlay.style.height = '100%';
-        overlay.style.cursor = 'crosshair';
-        overlay.style.pointerEvents = 'none'; // Start with none
-        overlay.style.zIndex = '10';
-        chartContainer.appendChild(overlay);
+        // Use the chart container directly instead of creating an overlay
+        const overlay = chartContainer; // Simplify by using container directly
         
         let isDragging = false;
         let startX, endX;
         let currentSelection = null;
         
+        // Add mousemove handler to change cursor when over chart area
+        canvas.addEventListener('mousemove', function(e) {
+            if (isDragging) return; // Don't change cursor while dragging
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;  // Keep this relative to canvas for cursor check
+            const y = e.clientY - rect.top;
+            
+            const chart = window.globalIntensityChart;
+            if (chart && chart.chartArea) {
+                const chartArea = chart.chartArea;
+                
+                // Change cursor based on position
+                if (x >= chartArea.left && x <= chartArea.right &&
+                    y >= chartArea.top && y <= chartArea.bottom) {
+                    canvas.style.cursor = 'crosshair';
+                } else {
+                    canvas.style.cursor = 'default';
+                }
+            }
+        });
+        
         // Add mouse event listeners to the canvas
         canvas.addEventListener('mousedown', function(e) {
-            // Only start drag if clicking on the chart area (not on controls)
             const rect = canvas.getBoundingClientRect();
-            const clickY = e.clientY - rect.top;
+            const containerRect = chartContainer.getBoundingClientRect();
             
-            // Check if click is in the chart area (not in the bottom controls area)
-            if (clickY < rect.height - 60) { // Assuming controls take ~60px at bottom
-                overlay.style.pointerEvents = 'auto';
+            // Calculate click position relative to the container (not canvas)
+            const clickX = e.clientX - containerRect.left;
+            const clickY = e.clientY - containerRect.top;
+            
+            // Get chart area bounds
+            const chart = window.globalIntensityChart;
+            if (!chart || !chart.chartArea) return;
+            
+            const chartArea = chart.chartArea;
+            
+            // Canvas offset within container
+            const canvasOffsetX = rect.left - containerRect.left;
+            const canvasOffsetY = rect.top - containerRect.top;
+            
+            // Check if click is inside the chart area horizontally (allow any Y position)
+            const canvasRelativeX = clickX - canvasOffsetX;
+            
+            if (canvasRelativeX >= chartArea.left && canvasRelativeX <= chartArea.right) {
+                
                 isDragging = true;
-                startX = e.clientX - rect.left;
+                startX = clickX; // Use the actual click position, no constraining needed
+                
                 
                 // Remove any existing selection
                 if (currentSelection) {
                     currentSelection.remove();
                     currentSelection = null;
                 }
+                
+                // Create initial selection at click position
+                currentSelection = document.createElement('div');
+                currentSelection.className = 'brush-selection';
+                currentSelection.style.position = 'absolute';
+                currentSelection.style.backgroundColor = 'rgba(255, 0, 0, 0.5)'; // Red line initially
+                currentSelection.style.pointerEvents = 'none';
+                // Position selection to match chart area exactly (accounting for canvas offset)
+                currentSelection.style.top = (chartArea.top + canvasOffsetY) + 'px';
+                currentSelection.style.height = (chartArea.bottom - chartArea.top) + 'px';
+                currentSelection.style.left = startX + 'px';
+                currentSelection.style.width = '1px';
+                overlay.appendChild(currentSelection);
+                
             }
         });
         
         document.addEventListener('mousemove', function(e) {
             if (!isDragging) return;
             
-            const rect = canvas.getBoundingClientRect();
-            endX = e.clientX - rect.left;
+            const containerRect = chartContainer.getBoundingClientRect();
+            endX = e.clientX - containerRect.left;  // Relative to container like startX
             
-            // Update or create selection visualization
-            if (!currentSelection) {
-                currentSelection = document.createElement('div');
-                currentSelection.className = 'brush-selection';
-                currentSelection.style.position = 'absolute';
-                currentSelection.style.backgroundColor = 'rgba(0, 123, 255, 0.3)';
-                currentSelection.style.border = '2px solid rgba(0, 123, 255, 0.8)';
-                currentSelection.style.top = '0';
-                currentSelection.style.height = '100%';
-                currentSelection.style.pointerEvents = 'none';
-                overlay.appendChild(currentSelection);
+            // Get chart area bounds to constrain selection
+            const chart = window.globalIntensityChart;
+            if (chart && chart.chartArea) {
+                const rect = canvas.getBoundingClientRect();
+                const canvasOffsetX = rect.left - containerRect.left;
+                const chartArea = chart.chartArea;
+                
+                // Constrain to chart area bounds (adjusted for container coordinates)
+                const minX = chartArea.left + canvasOffsetX;
+                const maxX = chartArea.right + canvasOffsetX;
+                endX = Math.max(minX, Math.min(maxX, endX));
             }
             
-            currentSelection.style.left = Math.min(startX, endX) + 'px';
-            currentSelection.style.width = Math.abs(endX - startX) + 'px';
+            // Update selection position (it was already created on mousedown)
+            if (currentSelection) {
+                const leftPos = Math.min(startX, endX);
+                const width = Math.abs(endX - startX);
+                
+                currentSelection.style.left = leftPos + 'px';
+                currentSelection.style.width = width + 'px';
+                
+                // Change color and add shadow once dragging starts
+                if (width > 2) {
+                    currentSelection.style.backgroundColor = 'rgba(0, 123, 255, 0.3)';
+                    currentSelection.style.boxShadow = 'inset 0 0 0 1px rgba(0, 123, 255, 0.8)';
+                }
+            }
         });
         
         document.addEventListener('mouseup', function(e) {
             if (!isDragging) return;
             isDragging = false;
-            overlay.style.pointerEvents = 'none';
             
-            const rect = canvas.getBoundingClientRect();
-            endX = e.clientX - rect.left;
+            const containerRect = chartContainer.getBoundingClientRect();
+            endX = e.clientX - containerRect.left;  // Relative to container
             
             if (Math.abs(endX - startX) > 5) {
                 const leftX = Math.min(startX, endX);
                 const rightX = Math.max(startX, endX);
                 
-                const leftRatio = leftX / rect.width;
-                const rightRatio = rightX / rect.width;
+                // Get the chart instance and its chart area
+                const chart = window.globalIntensityChart;
+                if (!chart) return;
                 
-                const minIntensity = intensityRange.min + leftRatio * (intensityRange.max - intensityRange.min);
-                const maxIntensity = intensityRange.min + rightRatio * (intensityRange.max - intensityRange.min);
+                const rect = canvas.getBoundingClientRect();
+                const canvasOffsetX = rect.left - containerRect.left;
+                
+                const chartArea = chart.chartArea;
+                const chartWidth = chartArea.right - chartArea.left;
+                const chartLeft = chartArea.left + canvasOffsetX;  // Adjust for canvas offset
+                
+                // Convert pixel coordinates to chart area coordinates
+                const leftChartX = Math.max(0, leftX - chartLeft);
+                const rightChartX = Math.min(chartWidth, rightX - chartLeft);
+                
+                // Convert to ratios within the chart area
+                const leftRatio = leftChartX / chartWidth;
+                const rightRatio = rightChartX / chartWidth;
+                
+                // Clamp ratios to valid range
+                const clampedLeftRatio = Math.max(0, Math.min(1, leftRatio));
+                const clampedRightRatio = Math.max(0, Math.min(1, rightRatio));
+                
+                const minIntensity = intensityRange.min + clampedLeftRatio * (intensityRange.max - intensityRange.min);
+                const maxIntensity = intensityRange.min + clampedRightRatio * (intensityRange.max - intensityRange.min);
+                
                 
                 applyFilter(minIntensity, maxIntensity);
             } else {
@@ -971,6 +1056,10 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         
         // Update all charts
         updateAllChartsWithFilter();
+        
+        // Update individual reports list
+        const currentSearchTerm = document.getElementById('hdri-search')?.value?.toLowerCase() || '';
+        filterHDRILinks(currentSearchTerm);
     }
     
     // Clear filter function
@@ -978,11 +1067,8 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         filteredData = [...allData];
         
         // Remove visual selection
-        const overlay = document.getElementById('intensity-brush-overlay');
-        if (overlay) {
-            const selections = overlay.querySelectorAll('.brush-selection');
-            selections.forEach(sel => sel.remove());
-        }
+        const selections = document.querySelectorAll('.brush-selection');
+        selections.forEach(sel => sel.remove());
         
         document.getElementById('selection-range').textContent = 'Full Range';
         
@@ -993,6 +1079,10 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         }
         
         updateAllChartsWithFilter();
+        
+        // Update individual reports list
+        const currentSearchTerm = document.getElementById('hdri-search')?.value?.toLowerCase() || '';
+        filterHDRILinks(currentSearchTerm);
     }
     
     // Update all charts with filtered data
@@ -1163,16 +1253,66 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         });
     }
     
-    function filterHDRILinks(searchTerm) {
+    function filterHDRILinks(searchTerm = '') {
         const links = document.querySelectorAll('.individual-link');
+        let visibleCount = 0;
+        let totalCount = links.length;
+        
+        // Get currently filtered HDRI names from intensity filtering
+        const filteredHdriNames = filteredData.map(row => row.hdri_name);
+        const isIntensityFiltered = filteredData.length < allData.length;
+        
         links.forEach(link => {
-            const hdriName = link.dataset.hdriName.toLowerCase();
-            if (hdriName.includes(searchTerm)) {
+            const hdriName = link.dataset.hdriName;
+            const hdriNameLower = hdriName.toLowerCase();
+            
+            // Check both search term and intensity filtering
+            const matchesSearch = !searchTerm || hdriNameLower.includes(searchTerm);
+            const matchesIntensity = !isIntensityFiltered || filteredHdriNames.includes(hdriName);
+            
+            if (matchesSearch && matchesIntensity) {
                 link.style.display = '';
+                // Add class for intensity filtering visual feedback
+                if (isIntensityFiltered) {
+                    link.classList.add('intensity-filtered');
+                } else {
+                    link.classList.remove('intensity-filtered');
+                }
+                visibleCount++;
             } else {
                 link.style.display = 'none';
+                link.classList.remove('intensity-filtered');
             }
         });
+        
+        // Update counter with more detailed info
+        const counter = document.getElementById('hdri-counter');
+        const intensityIndicator = document.getElementById('intensity-filter-indicator');
+        
+        if (counter) {
+            if (visibleCount === totalCount) {
+                counter.textContent = `${totalCount} files`;
+            } else {
+                let counterText = `${visibleCount} of ${totalCount} files`;
+                if (isIntensityFiltered && searchTerm) {
+                    counterText += ` (intensity + search)`;
+                } else if (isIntensityFiltered) {
+                    counterText += ` (intensity filtered)`;
+                } else if (searchTerm) {
+                    counterText += ` (search filtered)`;
+                }
+                counter.textContent = counterText;
+            }
+        }
+        
+        // Show/hide intensity filter indicator
+        if (intensityIndicator) {
+            if (isIntensityFiltered) {
+                intensityIndicator.style.display = 'block';
+            } else {
+                intensityIndicator.style.display = 'none';
+            }
+        }
     }
     
     // Initialize search on page load
@@ -1370,6 +1510,32 @@ def generate_html_template(
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 5px;
+        max-height: 400px;
+        overflow-y: auto;
+        border: 1px inset #c0c0c0;
+        padding: 10px;
+        background: #f8f8f8;
+        scrollbar-width: thin;
+        scrollbar-color: #808080 #c0c0c0;
+    }}
+    
+    .individual-links::-webkit-scrollbar {{
+        width: 16px;
+    }}
+    
+    .individual-links::-webkit-scrollbar-track {{
+        background: #c0c0c0;
+        border: 1px inset #c0c0c0;
+    }}
+    
+    .individual-links::-webkit-scrollbar-thumb {{
+        background: #808080;
+        border: 1px outset #808080;
+        border-radius: 0;
+    }}
+    
+    .individual-links::-webkit-scrollbar-thumb:hover {{
+        background: #606060;
     }}
     
     .individual-link {{
@@ -1385,6 +1551,16 @@ def generate_html_template(
     .individual-link:hover {{
         background: #e0e0e0;
         border: 1px inset #c0c0c0;
+    }}
+    
+    .individual-link.intensity-filtered {{
+        background: #e8f5e8 !important;
+        border: 1px outset #4CAF50 !important;
+    }}
+    
+    .individual-link.intensity-filtered:hover {{
+        background: #d0f0d0 !important;
+        border: 1px inset #4CAF50 !important;
     }}
     
     .overview-section {{
@@ -1576,8 +1752,16 @@ def generate_html_template(
         <h2>Individual Reports</h2>
         <div style="margin-bottom: 10px;">
             <input type="text" id="hdri-search" placeholder="Search HDRI names..." 
-                   style="width: 100%; padding: 8px; font-family: 'Courier New', monospace; 
-                          border: 1px inset #c0c0c0; background: #fff;">
+                   style="width: calc(100% - 200px); padding: 8px; font-family: 'Courier New', monospace; 
+                          border: 1px inset #c0c0c0; background: #fff; display: inline-block;">
+            <span id="hdri-counter" style="float: right; padding: 8px; background: #e0e0e0; 
+                  border: 1px outset #c0c0c0; font-weight: bold;">
+                {num_hdris} files
+            </span>
+        </div>
+        <div id="intensity-filter-indicator" style="display: none; margin-bottom: 10px; padding: 5px; 
+             background: #e8f5e8; border: 1px solid #4CAF50; font-size: 0.9rem; color: #2e7d32;">
+            🎯 Reports filtered by global intensity range
         </div>
         <div class="individual-links">
             {individual_links}
@@ -1605,13 +1789,13 @@ def generate_html_template(
                     <span id="selection-range">Full Range</span>
                     <button onclick="clearBrushSelection()">Clear</button>
                     <span id="chart-status">Ready</span>
-                </div>
-            </div>
+                    </div>
+                        </div>
             <div class="chart-container">
                 <canvas id="areaIntensityChart"></canvas>
-            </div>
         </div>
-        
+    </div>
+
         <!-- Person render charts -->
         <h3 style="color:#000; margin:20px 0 15px 0; font-size:1.1rem; background:#e0e0e0; padding:5px; border:1px outset #c0c0c0;">Person Render Intensity Analysis</h3>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px;">
@@ -1758,7 +1942,7 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Generate aggregate statistics for HDRI analysis experiment')
     parser.add_argument('experiment_dir', type=str, help='Path to experiment directory')
     
@@ -1768,7 +1952,7 @@ if __name__ == "__main__":
     if not experiment_dir.exists():
         print(f"Error: Experiment directory does not exist: {experiment_dir}")
         exit(1)
-    
+
     try:
         html_path = generate_aggregate_statistics_html(experiment_dir)
         print(f"Successfully generated aggregate statistics: {html_path}")

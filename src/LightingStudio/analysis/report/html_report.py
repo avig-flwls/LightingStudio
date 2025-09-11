@@ -166,6 +166,11 @@ def _generate_html_template(
                 </div>
                 '''
         
+        # Get average intensity for this person
+        avg_intensity_key = f"{person_key}_intensity"
+        avg_intensity = render_metrics.get(avg_intensity_key, 0)
+        avg_intensity_str = f"{avg_intensity:.3f}" if avg_intensity else "N/A"
+        
         cross_html = f"""
         <div class="person-cross-container">
             <h4>{person_name}</h4>
@@ -185,6 +190,10 @@ def _generate_html_template(
                 <div class="cross-bottom">
                     {get_view_with_metric("bottom")}
                 </div>
+            </div>
+            <div class="person-average-intensity">
+                <span class="intensity-label">Average Intensity:</span>
+                <span class="intensity-value">{avg_intensity_str}</span>
             </div>
         </div>
         """
@@ -440,6 +449,16 @@ def _generate_html_template(
             min-height: 100vh;
             margin: 0;
             padding: 0;
+        }}
+        
+        h3 {{
+            color: #000;
+            margin: 15px 0 10px 0;
+            font-size: 1.2rem;
+            background: #c0c0c0;
+            padding: 5px 10px;
+            border: 1px outset #c0c0c0;
+            font-weight: bold;
         }}
         
         .container {{
@@ -844,10 +863,34 @@ def _generate_html_template(
         }}
         
         /* New layout styles */
-        .main-content-row {{
+        .hdri-with-metrics {{
             display: flex;
-            gap: 10px;
-            margin: 5px 0;
+            gap: 20px;
+            margin-bottom: 30px;
+            align-items: flex-start;
+        }}
+        
+        .hdri-container {{
+            flex: 1;
+            display: flex;
+            justify-content: center;
+        }}
+        
+        .hdri-metrics-panel {{
+            flex: 0 0 300px;
+            background: #ffffff;
+            border: 1px inset #c0c0c0;
+            padding: 10px;
+        }}
+        
+        .hdri-metrics-panel h4 {{
+            color: #000;
+            margin: 0 0 10px 0;
+            font-size: 1rem;
+            background: #c0c0c0;
+            padding: 5px;
+            border: 1px outset #c0c0c0;
+            font-weight: bold;
         }}
         
         .original-hdri-container {{
@@ -874,27 +917,34 @@ def _generate_html_template(
             border: 1px solid #808080;
         }}
         
+        .persons-section {{
+            margin-bottom: 30px;
+            text-align: center;
+        }}
+        
+        .persons-row {{
+            margin-bottom: 10px;
+        }}
+        
         .persons-container {{
             display: flex;
-            gap: 5px;
-            flex: 1;
-            min-width: 300px;
+            gap: 40px;
+            justify-content: center;
         }}
         
         .person-cross-container {{
             background: #ffffff;
-            padding: 3px;
+            padding: 15px;
             border: 1px inset #c0c0c0;
-            flex: 1;
         }}
         
         .person-cross-container h4 {{
             color: #000;
-            margin: 0 0 5px 0;
-            font-size: 0.9rem;
+            margin: 0 0 15px 0;
+            font-size: 1.2rem;
             font-weight: bold;
             background: #c0c0c0;
-            padding: 2px 3px;
+            padding: 5px 10px;
             text-align: center;
         }}
         
@@ -906,9 +956,9 @@ def _generate_html_template(
                 ".     bottom .";
             grid-template-columns: 1fr 1fr 1fr;
             grid-template-rows: 1fr 1fr 1fr;
-            gap: 3px;
+            gap: 10px;
             aspect-ratio: 1;
-            padding: 3px;
+            padding: 10px;
         }}
         
         .cross-top {{ 
@@ -945,8 +995,8 @@ def _generate_html_template(
         }}
         
         .cross-layout img {{
-            width: 80px;
-            height: 80px;
+            width: 150px;
+            height: 150px;
             object-fit: cover;
             border: 1px solid #808080;
             cursor: pointer;
@@ -957,26 +1007,50 @@ def _generate_html_template(
         }}
         
         .missing-cross-image {{
-            width: 80px;
-            height: 80px;
+            width: 150px;
+            height: 150px;
             background: #e0e0e0;
             border: 1px dashed #808080;
             display: flex;
             align-items: center;
             justify-content: center;
             color: #404040;
-            font-size: 0.6rem;
+            font-size: 0.8rem;
         }}
         
         .view-intensity {{
             background: #f0f0f0;
             border: 1px inset #c0c0c0;
-            padding: 1px 4px;
+            padding: 3px 6px;
             font-family: 'Courier New', monospace;
-            font-size: 0.6rem;
+            font-size: 0.8rem;
             color: #000;
             text-align: center;
-            min-width: 40px;
+            min-width: 60px;
+        }}
+        
+        .person-average-intensity {{
+            margin-top: 15px;
+            padding: 8px;
+            background: #f0f0f0;
+            border: 1px inset #c0c0c0;
+            text-align: center;
+            font-size: 1rem;
+        }}
+        
+        .intensity-label {{
+            font-weight: bold;
+            color: #000;
+            margin-right: 10px;
+        }}
+        
+        .intensity-value {{
+            font-family: 'Courier New', monospace;
+            font-size: 1.1rem;
+            color: #000;
+            background: #ffffff;
+            padding: 3px 8px;
+            border: 1px inset #c0c0c0;
         }}
         
         .metrics-row {{
@@ -999,8 +1073,8 @@ def _generate_html_template(
             flex: 1;
         }}
         
-        .hdri-metrics-section h3,
-        .person-metrics-section h3 {{
+        .hdri-metrics-section h4,
+        .person-metrics-section h4 {{
             color: #000;
             margin: 0 0 5px 0;
             font-size: 0.9rem;
@@ -1047,16 +1121,25 @@ def _generate_html_template(
         }}
         
         @media (max-width: 768px) {{
-            .main-content-row {{
+            .hdri-with-metrics {{
                 flex-direction: column;
             }}
             
-            .metrics-row {{
-                flex-direction: column;
+            .hdri-metrics-panel {{
+                flex: 1 1 auto;
+                width: 100%;
+            }}
+            
+            .persons-row {{
+                margin-bottom: 20px;
             }}
             
             .persons-container {{
-                min-width: auto;
+                flex-direction: column;
+                gap: 20px;
+            }}
+            
+            .metrics-row {{
                 flex-direction: column;
             }}
             
@@ -1095,31 +1178,33 @@ def _generate_html_template(
             <div class="section">
                 <h2>Analysis Visualizations</h2>
                 
-                <!-- Row 1: HDRI and Person Renders -->
-                <div class="main-content-row">
-                    {original_hdri_section}
-                    {persons_section}
-                </div>
-                
-                <!-- Row 2: Metrics moved below HDRI -->
-                <div class="metrics-row">
-                    <div class="hdri-metrics-section">
-                        <h3>HDRI Analysis Metrics</h3>
+                <!-- Row 1: Original HDRI with metrics -->
+                <div class="hdri-with-metrics">
+                    <div class="hdri-container">
+                        {original_hdri_section}
+                    </div>
+                    <div class="hdri-metrics-panel">
+                        <h4>HDRI Analysis Metrics</h4>
                         {metrics_section}
                     </div>
-                    <div class="person-metrics-section">
-                        <h3>Person Render Metrics</h3>
-                        {person_metrics_section}
-                    </div>
                 </div>
                 
-                <!-- Row 2: Analysis Images -->
+                <!-- Row 2: Person Renders -->
+                <h3>Human Skin Renders</h3>
+                <div class="persons-section">
+                    <div class="persons-row">
+                        {persons_section}
+                    </div>
+                    <p class="image-description">Skin textures rendered from HDRI</p>
+                </div>
+                
+                <!-- Row 3: Analysis Images -->
                 <h3>Analysis Results</h3>
                 <div class="analysis-row">
                     {analysis_row}
                 </div>
                 
-                <!-- Row 3: SPH Reconstructions -->
+                <!-- Row 4: SPH Reconstructions -->
                 <h3>SPH Reconstructions</h3>
                 <div class="sph-row">
                     {sph_gallery}
