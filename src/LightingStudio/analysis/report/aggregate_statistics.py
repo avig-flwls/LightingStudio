@@ -447,105 +447,260 @@ def to_js_safe(obj):
 
 
 def generate_3d_plot_js(viz_data: Dict) -> str:
-    """Generate JavaScript code for 3D plots."""
+    """Generate JavaScript code for visually appealing 3D plots with enhanced Plotly styling."""
     js_code = []
+    
+    # Create an enhanced 3D plot manager with better visual design
+    js_code.append("""
+    // Enhanced 3D Plot Manager with Beautiful Styling
+    class Plot3DManager {
+        constructor(plotId, data, config) {
+            this.plotId = plotId;
+            this.data = data;
+            this.config = config;
+            this.plot = null;
+            
+            // Store original state
+            this.originalColors = this.data.map(d => this.config.getColor(d));
+            this.originalSizes = this.config.markerSize;
+            
+            // Filtering state
+            this.filteredIndices = new Set();
+        }
+        
+        initialize() {
+            // Create single trace for clean visualization
+            const trace = {
+                x: this.data.map(d => this.config.getX(d)),
+                y: this.data.map(d => this.config.getY(d)),
+                z: this.data.map(d => this.config.getZ(d)),
+                mode: 'markers',
+                type: 'scatter3d',
+                name: 'Data Points',
+                text: this.data.map(d => d.name),
+                marker: {
+                    size: this.originalSizes,
+                    color: this.originalColors,
+                    line: { 
+                        color: 'rgba(0, 0, 0, 0.3)', 
+                        width: 0.5 
+                    },
+                    opacity: 0.9,
+                    sizemode: 'diameter'
+                },
+                hovertemplate: this.config.hoverTemplate || 
+                              '<b>%{text}</b><br>' +
+                              '(%{x}, %{y}, %{z})<extra></extra>'
+            };
+            
+            const layout = {
+                title: {
+                    text: this.config.title,
+                    font: {
+                        size: 18,
+                        color: '#2c3e50',
+                        family: 'Arial, sans-serif'
+                    },
+                    y: 0.98,
+                    x: 0.5,
+                    xanchor: 'center'
+                },
+                scene: {
+                    xaxis: {
+                        ...this.config.xaxis,
+                        gridcolor: 'rgba(200, 200, 200, 0.3)',
+                        zerolinecolor: 'rgba(200, 200, 200, 0.5)',
+                        linecolor: 'rgba(200, 200, 200, 0.5)',
+                        tickfont: { size: 10, color: '#7f8c8d' }
+                    },
+                    yaxis: {
+                        ...this.config.yaxis,
+                        gridcolor: 'rgba(200, 200, 200, 0.3)',
+                        zerolinecolor: 'rgba(200, 200, 200, 0.5)',
+                        linecolor: 'rgba(200, 200, 200, 0.5)',
+                        tickfont: { size: 10, color: '#7f8c8d' }
+                    },
+                    zaxis: {
+                        ...this.config.zaxis,
+                        gridcolor: 'rgba(200, 200, 200, 0.3)',
+                        zerolinecolor: 'rgba(200, 200, 200, 0.5)',
+                        linecolor: 'rgba(200, 200, 200, 0.5)',
+                        tickfont: { size: 10, color: '#7f8c8d' }
+                    },
+                    aspectmode: 'cube',
+                    bgcolor: '#e3f2fd',
+                    camera: {
+                        eye: { x: 1.8, y: 0.8, z: 0.8 },
+                        center: { x: 0, y: 0, z: 0 }
+                    }
+                },
+                showlegend: false,
+                margin: { l: 0, r: 0, b: 20, t: 60 },
+                paper_bgcolor: '#f5f5f5',
+                hoverlabel: {
+                    bgcolor: 'rgba(255, 255, 255, 0.95)',
+                    bordercolor: 'rgba(0, 0, 0, 0.2)',
+                    font: { 
+                        size: 13, 
+                        color: '#2c3e50',
+                        family: 'Arial, sans-serif'
+                    },
+                    align: 'left'
+                }
+            };
+            
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                displaylogo: false,
+                modeBarButtonsToRemove: ['lasso3d', 'select3d'],
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: this.config.title.replace(/\s+/g, '_'),
+                    height: 800,
+                    width: 800,
+                    scale: 2
+                }
+            };
+            
+            this.plot = Plotly.newPlot(this.plotId, [trace], layout, config);
+        }
+        
+        updateFiltering(filteredNames) {
+            // Update colors and opacity for better visual hierarchy
+            const updatedColors = this.data.map((d, i) => {
+                if (!filteredNames.includes(d.name)) {
+                    // Make unselected points very subtle gray
+                    return 'rgba(150, 150, 150, 0.3)';
+                }
+                return this.originalColors[i];
+            });
+            
+            const updatedOpacities = this.data.map(d => {
+                return filteredNames.includes(d.name) ? 0.9 : 0.15;
+            });
+            
+            // Update only colors and opacity, not size
+            Plotly.restyle(this.plotId, {
+                'marker.color': [updatedColors],
+                'marker.opacity': [updatedOpacities]
+            });
+        }
+        
+        resetFiltering() {
+            // Reset to original colors and opacity
+            Plotly.restyle(this.plotId, {
+                'marker.color': [this.originalColors],
+                'marker.opacity': 0.9
+            });
+        }
+    }
+    """)
     
     # RGB 3D plots
     color_types = ['global', 'dc', 'dominant']
     for color_type in color_types:
         key = f'{color_type}_color_3d'
         if viz_data.get(key):
-            data = viz_data[key]
             js_code.append(f"""
             // {color_type.capitalize()} Color RGB Plot
-            (function() {{
-                const data = window.{color_type}Color3DData;
-                const trace = {{
-                    x: data.map(d => d.r),
-                    y: data.map(d => d.g),
-                    z: data.map(d => d.b),
-                    mode: 'markers',
-                    type: 'scatter3d',
-                    text: data.map(d => d.name),
-                    marker: {{
-                        size: 10,
-                        color: data.map(d => `rgb(${{d.r}},${{d.g}},${{d.b}})`),
-                        line: {{ color: 'black', width: 1 }}
+            window.{color_type}Color3DManager = new Plot3DManager(
+                '{color_type}Color3D',
+                window.{color_type}Color3DData,
+                {{
+                    title: '{color_type.capitalize()} Color',
+                    getX: d => d.r,
+                    getY: d => d.g,
+                    getZ: d => d.b,
+                    getColor: d => `rgb(${{d.r}},${{d.g}},${{d.b}})`,
+                    markerSize: 12,
+                    hoverTemplate: '<b>%{{text}}</b><br>' +
+                                  'RGB: (%{{x}}, %{{y}}, %{{z}})<extra></extra>',
+                    shadowOffset: 0.02,
+                    xaxis: {{ 
+                        title: {{ text: 'Red', font: {{ size: 14 }} }}, 
+                        range: [0, 255], 
+                        dtick: 50, 
+                        showgrid: true,
+                        showspikes: false
                     }},
-                    hoverinfo: 'text'
-                }};
-                
-                const layout = {{
-                    title: {{
-                        text: '{color_type.capitalize()} Color',
-                        y: 0.95
+                    yaxis: {{ 
+                        title: {{ text: 'Green', font: {{ size: 14 }} }}, 
+                        range: [0, 255], 
+                        dtick: 50, 
+                        showgrid: true,
+                        showspikes: false
                     }},
-                    scene: {{
-                        xaxis: {{ title: 'Red', range: [0, 255], dtick: 50, showgrid: true }},
-                        yaxis: {{ title: 'Green', range: [0, 255], dtick: 50, showgrid: true }},
-                        zaxis: {{ title: 'Blue', range: [0, 255], dtick: 50, showgrid: true }},
-                        aspectmode: 'cube',
-                        bgcolor: 'rgb(230, 240, 250)'  // Light blue background
-                    }},
-                    showlegend: false,
-                    margin: {{ l: 0, r: 0, b: 0, t: 80 }},
-                    paper_bgcolor: 'rgb(240, 245, 250)'  // Very light blue
-                }};
-                
-                window.{color_type}Color3DPlot = Plotly.newPlot('{color_type}Color3D', [trace], layout);
-            }})();
+                    zaxis: {{ 
+                        title: {{ text: 'Blue', font: {{ size: 14 }} }}, 
+                        range: [0, 255], 
+                        dtick: 50, 
+                        showgrid: true,
+                        showspikes: false
+                    }}
+                }}
+            );
             """)
     
     # Dominant direction 3D plot
     if viz_data.get('dominant_direction_3d'):
         js_code.append(f"""
         // Dominant Direction 3D Plot
-        (function() {{
-            const data = window.dominantDirection3DData;
-            const trace = {{
-                x: data.map(d => d.x),
-                y: data.map(d => d.y),
-                z: data.map(d => d.z),
-                mode: 'markers',
-                type: 'scatter3d',
-                text: data.map(d => d.name),
-                marker: {{
-                    size: 11,
-                    color: data.map(d => `rgb(${{d.color[0]}},${{d.color[1]}},${{d.color[2]}})`),
-                    line: {{ color: 'black', width: 1 }}
-                }},
-                hoverinfo: 'text',
-                showlegend: false
-            }};
-            
-            const layout = {{
-                title: {{
-                    text: 'Dominant Light Direction (Unit Vectors)',
-                    y: 0.95
-                }},
-                    scene: {{
-                        xaxis: {{ title: 'X', range: [-1, 1], dtick: 0.5, showgrid: true }},
-                        yaxis: {{ title: 'Y', range: [-1, 1], dtick: 0.5, showgrid: true }},
-                        zaxis: {{ title: 'Z', range: [-1, 1], dtick: 0.5, showgrid: true }},
-                        aspectmode: 'cube',
-                        bgcolor: 'rgb(230, 240, 250)'  // Light blue background
+        window.dominantDirection3DManager = new Plot3DManager(
+            'dominantDirection3D',
+            window.dominantDirection3DData,
+            {{
+                title: 'Dominant Light Direction',
+                getX: d => d.x,
+                getY: d => d.y,
+                getZ: d => d.z,
+                    getColor: d => `rgb(${{d.color[0]}},${{d.color[1]}},${{d.color[2]}})`,
+                    markerSize: 14,
+                    hoverTemplate: '<b>%{{text}}</b><br>' +
+                                  '(%{{x:.2f}}, %{{y:.2f}}, %{{z:.2f}})<extra></extra>',
+                    shadowOffset: 0.01,
+                    xaxis: {{ 
+                        title: {{ text: 'X', font: {{ size: 14 }} }}, 
+                        range: [-1, 1], 
+                        dtick: 0.5, 
+                        showgrid: true,
+                        showspikes: false
                     }},
-                    showlegend: false,
-                    margin: {{ l: 0, r: 0, b: 0, t: 80 }},
-                    paper_bgcolor: 'rgb(240, 245, 250)'  // Very light blue
-            }};
-            
-            window.dominantDirection3DPlot = Plotly.newPlot('dominantDirection3D', [trace], layout);
-        }})();
+                    yaxis: {{ 
+                        title: {{ text: 'Y', font: {{ size: 14 }} }}, 
+                        range: [-1, 1], 
+                        dtick: 0.5, 
+                        showgrid: true,
+                        showspikes: false
+                    }},
+                    zaxis: {{ 
+                        title: {{ text: 'Z', font: {{ size: 14 }} }}, 
+                        range: [-1, 1], 
+                        dtick: 0.5, 
+                        showgrid: true,
+                        showspikes: false
+                    }}
+            }}
+        );
         """)
     
-    # Wrap all 3D plot initialization in a DOMContentLoaded listener
+    # Initialize all plots
+    js_code.append("""
+    // Initialize all 3D plots
+    function initialize3DPlots() {
+        if (window.globalColor3DManager) window.globalColor3DManager.initialize();
+        if (window.dcColor3DManager) window.dcColor3DManager.initialize();
+        if (window.dominantColor3DManager) window.dominantColor3DManager.initialize();
+        if (window.dominantDirection3DManager) window.dominantDirection3DManager.initialize();
+    }
+    """)
     if js_code:
-        wrapped_code = """
+        wrapped_code = '\n'.join(js_code) + """
+        
         // Initialize 3D plots after DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
             setTimeout(function() {
-                """ + '\n'.join(js_code) + """
+                initialize3DPlots();
             }, 100); // Small delay to ensure Chart.js plots are rendered first
         });
         """
@@ -1183,62 +1338,34 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         const filteredNames = filteredData.map(row => row.hdri_name);
         const isFiltered = filteredData.length < allData.length;
         
-        // Update RGB plots
-        if (window.globalColor3DPlot) {
-            const allGlobalData = window.globalColor3DData;
-            const updatedColors = allGlobalData.map(d => {
-                if (isFiltered && !filteredNames.includes(d.name)) {
-                    return 'rgba(200, 200, 200, 0.3)'; // Gray out unselected
-                }
-                return `rgb(${d.r},${d.g},${d.b})`;
-            });
-            Plotly.restyle('globalColor3D', {
-                'marker.color': [updatedColors]
-                // Don't change size - keep original
-            });
-        }
-        
-        if (window.dcColor3DPlot) {
-            const allDcData = window.dcColor3DData;
-            const updatedColors = allDcData.map(d => {
-                if (isFiltered && !filteredNames.includes(d.name)) {
-                    return 'rgba(200, 200, 200, 0.3)';
-                }
-                return `rgb(${d.r},${d.g},${d.b})`;
-            });
-            Plotly.restyle('dcColor3D', {
-                'marker.color': [updatedColors]
-                // Don't change size - keep original
-            });
-        }
-        
-        if (window.dominantColor3DPlot) {
-            const allDominantData = window.dominantColor3DData;
-            const updatedColors = allDominantData.map(d => {
-                if (isFiltered && !filteredNames.includes(d.name)) {
-                    return 'rgba(200, 200, 200, 0.3)';
-                }
-                return `rgb(${d.r},${d.g},${d.b})`;
-            });
-            Plotly.restyle('dominantColor3D', {
-                'marker.color': [updatedColors]
-                // Don't change size - keep original
-            });
-        }
-        
-        // Update dominant direction plot
-        if (window.dominantDirection3DPlot) {
-            const allDirData = window.dominantDirection3DData;
-            const updatedColors = allDirData.map(d => {
-                if (isFiltered && !filteredNames.includes(d.name)) {
-                    return 'rgba(200, 200, 200, 0.3)';
-                }
-                return `rgb(${d.color[0]},${d.color[1]},${d.color[2]})`;
-            });
-            Plotly.restyle('dominantDirection3D', {
-                'marker.color': [updatedColors]
-                // Don't change size - keep original
-            });
+        if (isFiltered) {
+            // Update all plot managers with filtered data
+            if (window.globalColor3DManager) {
+                window.globalColor3DManager.updateFiltering(filteredNames);
+            }
+            if (window.dcColor3DManager) {
+                window.dcColor3DManager.updateFiltering(filteredNames);
+            }
+            if (window.dominantColor3DManager) {
+                window.dominantColor3DManager.updateFiltering(filteredNames);
+            }
+            if (window.dominantDirection3DManager) {
+                window.dominantDirection3DManager.updateFiltering(filteredNames);
+            }
+        } else {
+            // Reset all plots to original state
+            if (window.globalColor3DManager) {
+                window.globalColor3DManager.resetFiltering();
+            }
+            if (window.dcColor3DManager) {
+                window.dcColor3DManager.resetFiltering();
+            }
+            if (window.dominantColor3DManager) {
+                window.dominantColor3DManager.resetFiltering();
+            }
+            if (window.dominantDirection3DManager) {
+                window.dominantDirection3DManager.resetFiltering();
+            }
         }
     }
     
