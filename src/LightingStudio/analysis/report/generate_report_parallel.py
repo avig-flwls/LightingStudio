@@ -18,6 +18,8 @@ from src.LightingStudio.analysis.core.median_cut import (
     median_cut_sampling_to_cpu,
     visualize_samples,
 )
+from src.LightingStudio.analysis.core.median_cut_optimized import median_cut_sampling_to_cpu_optimized
+
 from src.LightingStudio.analysis.core.density_estimation import (
     expand_map_exact,
     expand_map_fast,
@@ -96,7 +98,7 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         
         # Start analysis
         start_time = time.time()
-        samples_cpu = median_cut_sampling_to_cpu(hdri, n_samples)
+        samples_cpu = median_cut_sampling_to_cpu_optimized(hdri, n_samples)
         timing['sampling'] = time.time() - start_time
         
         # # Time exact density map
