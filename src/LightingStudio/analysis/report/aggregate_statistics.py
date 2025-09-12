@@ -6,7 +6,7 @@ Rewritten with clean architecture for better maintainability.
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Union, Any
 import numpy as np
 import pandas as pd
 
@@ -26,6 +26,7 @@ def collect_experiment_metrics(experiment_dir: Path) -> Dict[str, List]:
         'dominant_color': [],
         'area_intensity': [],
         'dominant_direction': [],
+        'num_light_sources': [],  # Number of light sources from density map
         # Person render metrics
         'person_0001_intensity': [],
         'person_0002_intensity': [],
@@ -101,6 +102,20 @@ def collect_experiment_metrics(experiment_dir: Path) -> Dict[str, List]:
                     metrics_data['person_0002_right_intensity'].append(render_data.get('person_0002_right_intensity', 0.0))
                     metrics_data['person_0002_top_intensity'].append(render_data.get('person_0002_top_intensity', 0.0))
                     metrics_data['person_0002_bottom_intensity'].append(render_data.get('person_0002_bottom_intensity', 0.0))
+            
+            # Load component info (number of light sources)
+            component_info_path = hdri_dir / f"{hdri_name}_component_info.json"
+            if component_info_path.exists():
+                with open(component_info_path, 'r') as f:
+                    component_data = json.load(f)
+                    # Make sure we have a corresponding entry in hdri_names
+                    if hdri_name in metrics_data['hdri_names']:
+                        idx = metrics_data['hdri_names'].index(hdri_name)
+                        # Insert at the correct position or append
+                        if idx < len(metrics_data['num_light_sources']):
+                            metrics_data['num_light_sources'][idx] = component_data.get('num_components', 0)
+                        else:
+                            metrics_data['num_light_sources'].append(component_data.get('num_components', 0))
 
     print(f"Collected metrics from {len(metrics_data['hdri_names'])} HDRIs out of {subdirs_found} directories")
     
@@ -112,6 +127,8 @@ def collect_experiment_metrics(experiment_dir: Path) -> Dict[str, List]:
             while len(values) < expected_count:
                 if 'color' in key or 'direction' in key:
                     values.append([0, 0, 0])
+                elif key == 'num_light_sources':
+                    values.append(0)  # Integer for light sources
                 else:
                     values.append(0.0)
     
@@ -125,6 +142,7 @@ def create_dataframe_from_metrics(metrics_data: Dict[str, List]) -> pd.DataFrame
     # Basic info
     data_dict['hdri_name'] = metrics_data['hdri_names']
     data_dict['global_intensity'] = metrics_data['global_intensity']
+    data_dict['num_light_sources'] = metrics_data['num_light_sources']
     
     # Unpack RGB values into separate columns
     for i, rgb_list in enumerate(metrics_data['global_color']):
@@ -195,14 +213,29 @@ def create_dataframe_from_metrics(metrics_data: Dict[str, List]) -> pd.DataFrame
 # Visualization Data Preparation
 # ==============================
 
-def create_histogram_data(series: pd.Series, bins: int = 20) -> Tuple[List[float], List[int]]:
-    """Create histogram data from pandas series."""
+def create_histogram_data(series: pd.Series, bins: Union[int, str] = 20) -> Tuple[List[float], List[int]]:
+    """Create histogram data from pandas series.
+    
+    Args:
+        series: pandas series with data
+        bins: Either number of bins (int) or 'integers' for integer-based bins
+    """
     if len(series.dropna()) == 0:
         return [], []
     
-    counts, bin_edges = np.histogram(series.dropna(), bins=bins)
-    bin_centers = [(bin_edges[i] + bin_edges[i+1]) / 2 for i in range(len(bin_edges)-1)]
-    return bin_centers, counts.tolist()
+    if bins == 'integers':
+        # For integer data like light source counts
+        min_val = int(series.min())
+        max_val = int(series.max())
+        # Create bins for each integer value
+        bin_edges = np.arange(min_val, max_val + 2) - 0.5
+        counts, _ = np.histogram(series.dropna(), bins=bin_edges)
+        bin_centers = list(range(min_val, max_val + 1))
+        return bin_centers, counts.tolist()
+    else:
+        counts, bin_edges = np.histogram(series.dropna(), bins=bins)
+        bin_centers = [(bin_edges[i] + bin_edges[i+1]) / 2 for i in range(len(bin_edges)-1)]
+        return bin_centers, counts.tolist()
 
 
 def create_rgb_histogram_data(df: pd.DataFrame, rgb_cols: List[str], bins: int = 20) -> Dict[str, Tuple[List[float], List[int]]]:
@@ -283,6 +316,10 @@ def prepare_visualization_data(df: pd.DataFrame) -> Dict:
     
     # Area intensity RGB histogram  
     viz_data['area_intensity'] = create_rgb_histogram_data(df, ['area_r', 'area_g', 'area_b'])
+    
+    # Number of light sources histogram
+    if 'num_light_sources' in df.columns:
+        viz_data['num_light_sources'] = create_histogram_data(df['num_light_sources'], bins='integers')
     
     # Person render visualizations
     if 'person_0001_intensity' in df.columns and 'person_0002_intensity' in df.columns:
@@ -384,6 +421,17 @@ def calculate_comprehensive_stats(df: pd.DataFrame) -> Dict:
             'median': float(df['global_intensity'].median()),
             'q25': float(df['global_intensity'].quantile(0.25)),
             'q75': float(df['global_intensity'].quantile(0.75))
+        }
+    
+    # Number of light sources statistics
+    if 'num_light_sources' in df.columns:
+        stats['num_light_sources'] = {
+            'mean': float(df['num_light_sources'].mean()),
+            'std': float(df['num_light_sources'].std()),
+            'min': int(df['num_light_sources'].min()),
+            'max': int(df['num_light_sources'].max()),
+            'median': float(df['num_light_sources'].median()),
+            'mode': int(df['num_light_sources'].mode()[0]) if len(df['num_light_sources'].mode()) > 0 else int(df['num_light_sources'].median())
         }
     
     # Person render statistics
@@ -798,6 +846,61 @@ def generate_chart_js(viz_data: Dict, stats: Dict) -> str:
     }});
         """)
     
+    # Number of light sources chart
+    if viz_data.get('num_light_sources'):
+        light_labels = viz_data['num_light_sources'][0]
+        light_data = viz_data['num_light_sources'][1]
+        
+        js_code.append(f"""
+        // Number of Light Sources Chart
+        var lightSourcesCtx = document.getElementById('lightSourcesChart').getContext('2d');
+        window.lightSourcesChart = new Chart(lightSourcesCtx, {{
+            type: 'bar',
+            data: {{
+                labels: {to_js_safe(light_labels)},
+                datasets: [{{
+                    label: 'Count',
+                    data: {to_js_safe(light_data)},
+                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {{
+                    x: {{
+                        title: {{
+                            display: true,
+                            text: 'Number of Light Sources'
+                        }},
+                        ticks: {{
+                            stepSize: 1,
+                            callback: function(value) {{
+                                return Number.isInteger(value) ? value : '';
+                            }}
+                        }}
+                    }},
+                    y: {{
+                        beginAtZero: true,
+                        title: {{
+                            display: true,
+                            text: 'Count'
+                        }},
+                        ticks: {{
+                            stepSize: 1,
+                            precision: 0
+                        }}
+                    }}
+                }},
+                plugins: {{
+                    title: {{ display: true, text: 'Light Source Count Distribution' }}
+                }}
+        }}
+    }});
+        """)
+    
     # Person average intensity chart
     if viz_data.get('person_average'):
         p1_data = viz_data['person_average']['person_0001']
@@ -980,6 +1083,8 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
     let allData = JSON_DATA_PLACEHOLDER;
     let filteredData = [...allData];
     let intensityRange = { min: 0, max: 1 };
+    let areaIntensityRange = { min: 0, max: 1 };
+    let lightSourceFilter = null; // { min: number, max: number } or null
     let personIntensityRanges = {
         average: { min: 0, max: 1 },
         person1Directional: { min: 0, max: 1 },
@@ -990,8 +1095,26 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
     document.addEventListener('DOMContentLoaded', function() {
         // Calculate intensity ranges
         const intensities = allData.map(row => row.global_intensity);
+        
+        // Initialize light source range
+        initializeLightSourceRange();
         intensityRange.min = Math.min(...intensities);
         intensityRange.max = Math.max(...intensities);
+        
+        // Initialize area intensity range
+        const areaR = allData.map(row => row.area_r).filter(v => v !== undefined);
+        const areaG = allData.map(row => row.area_g).filter(v => v !== undefined);
+        const areaB = allData.map(row => row.area_b).filter(v => v !== undefined);
+        if (areaR.length > 0) {
+            const minR = Math.min(...areaR);
+            const maxR = Math.max(...areaR);
+            const minG = Math.min(...areaG);
+            const maxG = Math.max(...areaG);
+            const minB = Math.min(...areaB);
+            const maxB = Math.max(...areaB);
+            areaIntensityRange.min = Math.min(minR, minG, minB);
+            areaIntensityRange.max = Math.max(maxR, maxG, maxB);
+        }
         
         // Calculate person intensity ranges
         const person1Data = allData.map(row => row.person_0001_intensity).filter(v => v != null);
@@ -1031,10 +1154,162 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         // Set up brush selection after a small delay to ensure charts are rendered
         setTimeout(() => {
         setupBrushSelection();
+            // Add extra delay for light sources chart to ensure it's fully rendered
+            setTimeout(() => {
+                setupLightSourceBrushSelection();
+            }, 100);
             // Setup direction filtering after 3D plots are initialized
             setupDirectionFiltering();
         }, 300);
     });
+    
+    // Setup light source brush selection
+    function setupLightSourceBrushSelection() {
+        const canvas = document.getElementById('lightSourcesChart');
+        if (!canvas || !canvas.parentElement) return;
+        
+        const chart = window.lightSourcesChart;
+        if (!chart || !chart.chartArea) {
+            console.warn('Light sources chart not ready, retrying...');
+            setTimeout(setupLightSourceBrushSelection, 100);
+            return;
+        }
+        
+        const chartContainer = canvas.parentElement;
+        let isSelecting = false;
+        let startX = 0;
+        let endX = 0;
+        let selectionBox = null;
+        
+        canvas.addEventListener('mouseenter', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const chart = window.lightSourcesChart;
+            if (chart && chart.chartArea) {
+                const chartArea = chart.chartArea;
+                
+                if (x >= chartArea.left && x <= chartArea.right &&
+                    y >= chartArea.top && y <= chartArea.bottom) {
+                    canvas.style.cursor = 'crosshair';
+                } else {
+                    canvas.style.cursor = 'default';
+                }
+            }
+        });
+        
+        canvas.addEventListener('mousedown', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            const containerRect = chartContainer.getBoundingClientRect();
+            const clickX = e.clientX - containerRect.left;
+            const clickY = e.clientY - containerRect.top;
+            
+            const chart = window.lightSourcesChart;
+            if (!chart || !chart.chartArea) return;
+            
+            const chartArea = chart.chartArea;
+            const canvasOffsetX = rect.left - containerRect.left;
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (x >= chartArea.left && x <= chartArea.right &&
+                y >= chartArea.top && y <= chartArea.bottom) {
+                isSelecting = true;
+                startX = clickX;
+                
+                if (!selectionBox) {
+                    selectionBox = document.createElement('div');
+                    selectionBox.className = 'selection-box';
+                    selectionBox.style.cssText = `
+                        position: absolute;
+                        background: rgba(0, 123, 255, 0.2);
+                        border: 2px solid #007bff;
+                        pointer-events: none;
+                        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+                        z-index: 1000;
+                    `;
+                    chartContainer.appendChild(selectionBox);
+                }
+                
+                const boxLeft = startX;
+                const canvasOffsetY = rect.top - containerRect.top;
+                const chartHeight = chartArea.bottom - chartArea.top;
+                
+                // Position selection to match chart area exactly (accounting for canvas offset)
+                selectionBox.style.left = boxLeft + 'px';
+                selectionBox.style.top = (chartArea.top + canvasOffsetY) + 'px';
+                selectionBox.style.width = '0px';
+                selectionBox.style.height = chartHeight + 'px';
+                selectionBox.style.display = 'block';
+            }
+        });
+        
+        document.addEventListener('mousemove', function(e) {
+            if (!isSelecting) return;
+            
+            const containerRect = chartContainer.getBoundingClientRect();
+            endX = e.clientX - containerRect.left;
+            
+            const chart = window.lightSourcesChart;
+            if (chart && chart.chartArea) {
+                const rect = canvas.getBoundingClientRect();
+                const canvasOffsetX = rect.left - containerRect.left;
+                const chartArea = chart.chartArea;
+                
+                const constrainedEndX = Math.max(
+                    canvasOffsetX + chartArea.left,
+                    Math.min(endX, canvasOffsetX + chartArea.right)
+                );
+                
+                if (selectionBox) {
+                    const left = Math.min(startX, constrainedEndX);
+                    const width = Math.abs(constrainedEndX - startX);
+                    selectionBox.style.left = left + 'px';
+                    selectionBox.style.width = width + 'px';
+                }
+            }
+        });
+        
+        document.addEventListener('mouseup', function(e) {
+            if (!isSelecting) return;
+            isSelecting = false;
+            
+            if (selectionBox) {
+                selectionBox.style.display = 'none';
+            }
+            
+            if (Math.abs(endX - startX) > 5) {
+                const containerRect = chartContainer.getBoundingClientRect();
+                const leftX = Math.min(startX, endX);
+                const rightX = Math.max(startX, endX);
+                
+                const chart = window.lightSourcesChart;
+                if (!chart) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const canvasOffsetX = rect.left - containerRect.left;
+                
+                const chartArea = chart.chartArea;
+                const chartLeft = canvasOffsetX + chartArea.left;
+                const chartWidth = chartArea.right - chartArea.left;
+                
+                const leftRatio = (leftX - chartLeft) / chartWidth;
+                const rightRatio = (rightX - chartLeft) / chartWidth;
+                
+                if (!lightSourceRange) return;
+                
+                const range = lightSourceRange.max - lightSourceRange.min + 1;
+                const leftBin = Math.floor(leftRatio * range);
+                const rightBin = Math.ceil(rightRatio * range) - 1;
+                
+                const minSources = lightSourceRange.min + Math.max(0, leftBin);
+                const maxSources = lightSourceRange.min + Math.min(range - 1, rightBin);
+                
+                applyLightSourceFilter(minSources, maxSources);
+            }
+        });
+    }
     
     // Brush selection setup
     function setupBrushSelection() {
@@ -1226,6 +1501,31 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         applyCombinedFilters();
     }
     
+    // Apply light source filter
+    function applyLightSourceFilter(minSources, maxSources) {
+        lightSourceFilter = { min: minSources, max: maxSources };
+        
+        // Update display
+        const rangeText = minSources === maxSources ? 
+            `${minSources} source${minSources === 1 ? '' : 's'}` : 
+            `${minSources}-${maxSources} sources`;
+        document.getElementById('light-source-selection-range').textContent = rangeText;
+        
+        // Apply combined filters
+        applyCombinedFilters();
+    }
+    
+    // Clear light source selection
+    function clearLightSourceSelection() {
+        lightSourceFilter = null;
+        
+        // Update display
+        document.getElementById('light-source-selection-range').textContent = 'All Sources';
+        
+        // Apply combined filters
+        applyCombinedFilters();
+    }
+    
     // Clear filter function
     function clearFilter() {
         currentIntensityRange = null;
@@ -1242,10 +1542,102 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
     
     // Update all charts with filtered data
     function updateAllChartsWithFilter() {
+        updateGlobalIntensityChart();
+        updateAreaIntensityChart();
         updatePersonAverageChart();
         updatePersonDirectionalChart('person1DirectionalChart', 'person_0001');
         updatePersonDirectionalChart('person2DirectionalChart', 'person_0002');
+        updateLightSourcesChart();
         update3DVisualizations();
+    }
+    
+    // Update global intensity chart
+    function updateGlobalIntensityChart() {
+        const chart = window.globalIntensityChart;
+        if (!chart) return;
+        
+        // Get filtered intensities
+        const intensities = filteredData.map(row => row.global_intensity);
+        if (intensities.length === 0) return;
+        
+        // Use the original intensity range for consistent binning
+        const bins = 20;
+        const min = intensityRange.min;
+        const max = intensityRange.max;
+        const binWidth = (max - min) / bins;
+        
+        // Create bins
+        const labels = [];
+        const counts = new Array(bins).fill(0);
+        
+        for (let i = 0; i < bins; i++) {
+            labels.push(((min + (i + 0.5) * binWidth)).toFixed(3));
+        }
+        
+        // Count intensities in each bin
+        intensities.forEach(intensity => {
+            const binIndex = Math.min(Math.floor((intensity - min) / binWidth), bins - 1);
+            if (binIndex >= 0 && binIndex < bins) {
+                counts[binIndex]++;
+            }
+        });
+        
+        // Update chart
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = counts;
+        chart.update();
+    }
+    
+    // Update area intensity RGB chart
+    function updateAreaIntensityChart() {
+        const chart = window.areaIntensityChart;
+        if (!chart) return;
+        
+        // Get filtered area intensities
+        const areaR = filteredData.map(row => row.area_r).filter(v => v !== undefined);
+        const areaG = filteredData.map(row => row.area_g).filter(v => v !== undefined);
+        const areaB = filteredData.map(row => row.area_b).filter(v => v !== undefined);
+        
+        if (areaR.length === 0) return;
+        
+        // Use consistent binning
+        const bins = 20;
+        const min = areaIntensityRange.min;
+        const max = areaIntensityRange.max;
+        const binWidth = (max - min) / bins;
+        
+        // Create bins
+        const labels = [];
+        const countsR = new Array(bins).fill(0);
+        const countsG = new Array(bins).fill(0);
+        const countsB = new Array(bins).fill(0);
+        
+        for (let i = 0; i < bins; i++) {
+            labels.push(((min + (i + 0.5) * binWidth)).toFixed(1));
+        }
+        
+        // Count values in each bin
+        areaR.forEach(value => {
+            const binIndex = Math.min(Math.floor((value - min) / binWidth), bins - 1);
+            if (binIndex >= 0 && binIndex < bins) countsR[binIndex]++;
+        });
+        
+        areaG.forEach(value => {
+            const binIndex = Math.min(Math.floor((value - min) / binWidth), bins - 1);
+            if (binIndex >= 0 && binIndex < bins) countsG[binIndex]++;
+        });
+        
+        areaB.forEach(value => {
+            const binIndex = Math.min(Math.floor((value - min) / binWidth), bins - 1);
+            if (binIndex >= 0 && binIndex < bins) countsB[binIndex]++;
+        });
+        
+        // Update chart
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = countsR;
+        chart.data.datasets[1].data = countsG;
+        chart.data.datasets[2].data = countsB;
+        chart.update();
     }
     
     // Update person average chart
@@ -1774,7 +2166,7 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
     }
     
     function applyCombinedFilters() {
-        // Combine intensity and direction filters with AND logic
+        // Combine intensity, light source, and direction filters with AND logic
         let combinedFilteredData = allData;
         
         // Apply intensity filter if active
@@ -1782,6 +2174,14 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
             combinedFilteredData = combinedFilteredData.filter(row => 
                 row.global_intensity >= currentIntensityRange.min && 
                 row.global_intensity <= currentIntensityRange.max
+            );
+        }
+        
+        // Apply light source filter if active
+        if (lightSourceFilter) {
+            combinedFilteredData = combinedFilteredData.filter(row => 
+                row.num_light_sources >= lightSourceFilter.min && 
+                row.num_light_sources <= lightSourceFilter.max
             );
         }
         
@@ -1817,16 +2217,60 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         }
         
         // Update filter indicator
-        const hasFilters = currentIntensityRange || directionFilterActive;
+        const hasFilters = currentIntensityRange || lightSourceFilter || directionFilterActive;
         document.getElementById('intensity-filter-indicator').style.display = hasFilters ? 'inline' : 'none';
         if (hasFilters) {
             const filterTexts = [];
             if (currentIntensityRange) filterTexts.push('Intensity');
+            if (lightSourceFilter) filterTexts.push('Light Sources');
             if (directionFilterActive) filterTexts.push('Direction');
             document.getElementById('intensity-filter-indicator').textContent = `Filters: ${filterTexts.join(' & ')}`;
         }
     }
     
+    
+    // Store the original light source range
+    let lightSourceRange = null;
+    
+    function initializeLightSourceRange() {
+        const allLightCounts = allData.map(row => row.num_light_sources).filter(v => v !== undefined);
+        if (allLightCounts.length > 0) {
+            lightSourceRange = {
+                min: Math.min(...allLightCounts),
+                max: Math.max(...allLightCounts)
+            };
+        }
+    }
+    
+    // Update light sources chart
+    function updateLightSourcesChart() {
+        const chart = window.lightSourcesChart;
+        if (!chart) return;
+        
+        // Initialize range on first call
+        if (!lightSourceRange) {
+            initializeLightSourceRange();
+            if (!lightSourceRange) return;
+        }
+        
+        // Get filtered light source counts
+        const lightCounts = filteredData.map(row => row.num_light_sources).filter(v => v !== undefined);
+        
+        // Create bins for ALL integer values in the original range
+        const labels = [];
+        const counts = [];
+        
+        for (let i = lightSourceRange.min; i <= lightSourceRange.max; i++) {
+            labels.push(i.toString());
+            // Count how many filtered items have this value (0 if none)
+            counts.push(lightCounts.filter(v => v === i).length);
+        }
+        
+        // Update chart
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = counts;
+        chart.update();
+    }
     
     // Update 3D visualizations
     function update3DVisualizations() {
@@ -1942,8 +2386,9 @@ def generate_filtering_js(df_json: str, filter_config: Dict, viz_data: Dict) -> 
         setupSearch();
     });
     
-    // Expose clear function globally
+    // Expose clear functions globally
     window.clearBrushSelection = clearFilter;
+    window.clearLightSourceSelection = clearLightSourceSelection;
     """
     
     # Replace placeholder with actual data
@@ -1972,6 +2417,23 @@ def generate_stats_tables(stats: Dict) -> str:
                 <tr><td>Min:</td><td>{s['min']:.4f}</td></tr>
                 <tr><td>Max:</td><td>{s['max']:.4f}</td></tr>
                 <tr><td>Median:</td><td>{s['median']:.4f}</td></tr>
+            </table>
+        </div>
+        """)
+    
+    # Number of light sources stats
+    if 'num_light_sources' in stats:
+        s = stats['num_light_sources']
+        tables.append(f"""
+        <div class="stats-table">
+            <h4>Light Source Count Statistics</h4>
+            <table>
+                <tr><td>Mean:</td><td>{s['mean']:.1f}</td></tr>
+                <tr><td>Std Dev:</td><td>{s['std']:.1f}</td></tr>
+                <tr><td>Min:</td><td>{s['min']}</td></tr>
+                <tr><td>Max:</td><td>{s['max']}</td></tr>
+                <tr><td>Median:</td><td>{s['median']:.1f}</td></tr>
+                <tr><td>Mode:</td><td>{s['mode']}</td></tr>
             </table>
         </div>
         """)
@@ -2080,6 +2542,10 @@ def generate_html_template(
         box-sizing: border-box;
     }}
     
+    html {{
+        overflow-y: scroll; /* Always show vertical scrollbar to prevent layout shift */
+    }}
+    
     body {{
         font-family: 'Courier New', monospace;
         line-height: 1.4;
@@ -2094,6 +2560,7 @@ def generate_html_template(
         max-width: 100%;
         margin: 0;
         padding: 10px;
+        width: 100%; /* Ensure consistent width */
     }}
     
     .header {{
@@ -2251,6 +2718,7 @@ def generate_html_template(
         padding: 15px;
         border: 1px inset #c0c0c0;
         position: relative;
+        min-height: 350px; /* Prevent height changes */
     }}
     
     .chart-container canvas {{
@@ -2415,8 +2883,9 @@ def generate_html_template(
         <h2>Intensity Distribution & Interactive Filtering</h2>
         
         <!-- Main intensity charts -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; margin-bottom:20px;">
             <div class="chart-container">
+                <h4 style="text-align:center; margin:5px 0; font-size:14px; color:#000;">Global Intensity</h4>
                 <canvas id="globalIntensityChart"></canvas>
                 <div class="chart-controls">
                     <span>🎯 Click & Drag to Filter: </span>
@@ -2426,7 +2895,17 @@ def generate_html_template(
                     </div>
                         </div>
             <div class="chart-container">
+                <h4 style="text-align:center; margin:5px 0; font-size:14px; color:#000;">Area Intensity (RGB)</h4>
                 <canvas id="areaIntensityChart"></canvas>
+        </div>
+            <div class="chart-container">
+                <h4 style="text-align:center; margin:5px 0; font-size:14px; color:#000;">Number of Light Sources</h4>
+                <canvas id="lightSourcesChart"></canvas>
+                <div class="chart-controls">
+                    <span>🎯 Click & Drag to Filter: </span>
+                    <span id="light-source-selection-range">All Sources</span>
+                    <button onclick="clearLightSourceSelection()">Clear</button>
+                </div>
         </div>
     </div>
 
@@ -2445,11 +2924,11 @@ def generate_html_template(
             <div class="chart-container" style="height:350px;">
                 <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Dominant Color</h3>
                 <div id="dominantColor3D" style="height:calc(100% - 20px);"></div>
-            </div>
+        </div>
             <div class="chart-container" style="height:350px;">
                 <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Dominant Light Direction</h3>
                 <div id="dominantDirection3D" style="height:calc(100% - 20px);"></div>
-            </div>
+    </div>
             <div class="chart-container" style="height:350px;">
                 <h3 style="text-align:center; margin:2px 0; font-size:14px; color:#000;">Global Color</h3>
                 <div id="globalColor3D" style="height:calc(100% - 20px);"></div>

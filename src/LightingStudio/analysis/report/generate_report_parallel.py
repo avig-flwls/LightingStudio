@@ -104,9 +104,9 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         # density_map_exact = expand_map_exact(hdri, samples_cpu, min_count=4, normalize=True)
         # timing['exact_density'] = time.time() - start_time
         
-        # Time fast density map
+        # Time fast density map with connected components analysis
         start_time = time.time()
-        density_map_fast = expand_map_fast(hdri, samples_cpu, min_count=4, normalize=True)
+        density_map_fast, component_vis, num_components = expand_map_fast(hdri, samples_cpu, min_count=4)
         timing['fast_density'] = time.time() - start_time
 
         # Time naive metrics
@@ -137,6 +137,8 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
             # Save original HDRI as PNG only
             exr_to_png_tensor(hdri, web_dir / f"{hdri_path.stem}_original.png", gamma=2.2, exposure=0.0)
             exr_to_png_tensor(density_map_fast, web_dir / f"{hdri_path.stem}_density_map_fast.png", gamma=2.2, exposure=0.0)
+            component_vis_rgb = component_vis[..., [2, 1, 0]].float() / 255.0  # BGR to RGB and normalize to [0,1]
+            exr_to_png_tensor(component_vis_rgb, web_dir / f"{hdri_path.stem}_components.png", gamma=1.0, exposure=0.0)
             vis_hdri = visualize_samples(hdri, samples_cpu)
             exr_to_png_tensor(vis_hdri, web_dir / f"{hdri_path.stem}_median_cut.png", gamma=2.2, exposure=0.0)
             for l in range(l_max + 1):
@@ -149,6 +151,8 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
             exr_to_png_tensor(hdri, web_dir / f"{hdri_path.stem}_original.png", gamma=2.2, exposure=0.0)
             write_exr(density_map_fast, hdri_output_dir / f"{hdri_path.stem}_density_map_fast.exr")
             exr_to_png_tensor(density_map_fast, web_dir / f"{hdri_path.stem}_density_map_fast.png", gamma=2.2, exposure=0.0)
+            component_vis_rgb = component_vis[..., [2, 1, 0]].float() / 255.0  # BGR to RGB and normalize to [0,1]
+            exr_to_png_tensor(component_vis_rgb, web_dir / f"{hdri_path.stem}_components.png", gamma=1.0, exposure=0.0)
             vis_hdri = visualize_samples(hdri, samples_cpu)
             write_exr(vis_hdri, hdri_output_dir / f"{hdri_path.stem}_median_cut.exr")
             exr_to_png_tensor(vis_hdri, web_dir / f"{hdri_path.stem}_median_cut.png", gamma=2.2, exposure=0.0)
@@ -171,6 +175,15 @@ def process_single_hdri(hdri_path, output_dir, hdri_names, n_samples, l_max, png
         sph_metrics_dict = sph_metrics_cpu.to_dict()
         with open(hdri_output_dir / f"{hdri_path.stem}_sph_metrics.json", "w") as f:
             json.dump(sph_metrics_dict, f, indent=2)
+        
+        # Save component count as JSON
+        component_info = {
+            "num_components": int(num_components),
+            "threshold": 115,
+            "min_component_size": 100
+        }
+        with open(hdri_output_dir / f"{hdri_path.stem}_component_info.json", "w") as f:
+            json.dump(component_info, f, indent=2)
 
         # Blender renderings - abstracted into dedicated module
         start_time = time.time()

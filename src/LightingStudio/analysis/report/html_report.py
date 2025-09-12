@@ -32,7 +32,7 @@ def generate_html_report(
     png_files = {}
     png_names = [
         "original", "median_cut", "density_map_fast", "sph_metrics",
-        "reconstructed_1", "reconstructed_2", "reconstructed_3"
+        "reconstructed_1", "reconstructed_2", "reconstructed_3", "components"
     ]
     
     for name in png_names:
@@ -91,6 +91,12 @@ def generate_html_report(
     if render_metrics_path.exists():
         with open(render_metrics_path, 'r') as f:
             metrics['render'] = json.load(f)
+    
+    # Load component info
+    component_info_path = hdri_output_dir / f"{hdri_name}_component_info.json"
+    if component_info_path.exists():
+        with open(component_info_path, 'r') as f:
+            metrics['component_info'] = json.load(f)
     
     # Generate HTML content
     html_content = _generate_html_template(hdri_name, png_files, metrics, hdri_list, hdri_output_dir, person_images)
@@ -220,13 +226,39 @@ def _generate_html_template(
     
     for img_key, title, description in analysis_configs:
         if png_files.get(img_key):
-            analysis_row += f"""
-            <div class="analysis-container">
-                <h4>{title}</h4>
-                <img src="{png_files[img_key]}" alt="{title}" onclick="openModal(this)">
-                <p class="image-description">{description}</p>
-            </div>
-            """
+            # Special handling for density map to add component count and picture-in-picture
+            if img_key == "density_map_fast":
+                component_count = metrics.get('component_info', {}).get('num_components', 'N/A')
+                if png_files.get("components"):
+                    # Density map with picture-in-picture component visualization
+                    analysis_row += f"""
+                    <div class="analysis-container">
+                        <h4>{title} (Light Sources: {component_count})</h4>
+                        <div class="density-map-container">
+                            <img src="{png_files[img_key]}" alt="{title}" onclick="openModal(this)" class="main-image">
+                            <img src="{png_files['components']}" alt="Components" class="pip-image" onclick="openModal(this)">
+                        </div>
+                        <p class="image-description">{description}</p>
+                    </div>
+                    """
+                else:
+                    # Density map without component visualization
+                    analysis_row += f"""
+                    <div class="analysis-container">
+                        <h4>{title} (Light Sources: {component_count})</h4>
+                        <img src="{png_files[img_key]}" alt="{title}" onclick="openModal(this)">
+                        <p class="image-description">{description}</p>
+                    </div>
+                    """
+            else:
+                # Regular analysis images
+                analysis_row += f"""
+                <div class="analysis-container">
+                    <h4>{title}</h4>
+                    <img src="{png_files[img_key]}" alt="{title}" onclick="openModal(this)">
+                    <p class="image-description">{description}</p>
+                </div>
+                """
         else:
             analysis_row += f"""
             <div class="analysis-container missing">
@@ -651,6 +683,35 @@ def _generate_html_template(
         
         .analysis-container img:hover {{
             border: 1px solid #000;
+        }}
+        
+        /* Picture-in-picture styles for density map */
+        .density-map-container {{
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }}
+        
+        .density-map-container .main-image {{
+            width: 100%;
+            height: auto;
+            display: block;
+        }}
+        
+        .density-map-container .pip-image {{
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 30%;
+            height: auto;
+            border: 2px solid #ffffff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            cursor: pointer;
+        }}
+        
+        .density-map-container .pip-image:hover {{
+            border: 2px solid #ffff00;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.8);
         }}
         
         .sph-row {{
