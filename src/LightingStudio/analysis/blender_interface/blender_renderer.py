@@ -14,7 +14,7 @@ from pathlib import Path
 BLENDER_PATH = r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe"
 PACKED_BLEND_FILE_PATH = Path(r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\render_assets\packed_blend_file.blend")
 PREPARE_SCRIPT_PATH = Path(r"C:\Users\AviGoyal\Documents\LightingStudio\src\LightingStudio\analysis\blender_interface\prepare_blend_file.py")
-
+WHITE_BACKGROUND_FOLDER = Path(r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\render_assets\white_background")
 
 def copy_render_assets(destination_dir: Path) -> bool:
     """Copy the packed blend file into the render_assets directory with its original name."""
@@ -70,6 +70,30 @@ def compute_render_metrics(output_dir: Path) -> bool:
     
     metrics["person_0001_intensity"] = float(np.mean(person_0001_values))
     metrics["person_0002_intensity"] = float(np.mean(person_0002_values))
+
+
+    # Compute difference from white
+    file_names = ["person_0001_front", "person_0001_left", "person_0001_right", "person_0001_top", "person_0001_bottom", "person_0002_front", "person_0002_left", "person_0002_right", "person_0002_top", "person_0002_bottom"]
+    color_differences = []
+    for file_name in file_names:
+        file_path = WHITE_BACKGROUND_FOLDER / f"{file_name}.png"
+        white_img = cv2.imread(str(file_path), cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+        white_img = cv2.cvtColor(white_img, cv2.COLOR_BGR2RGB)
+
+        file_path = render_metrics_dir / f"{file_name}.png"
+        img = cv2.imread(str(file_path), cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        diff = img - white_img
+        mask = np.any(diff != 0, axis=2)
+        if np.any(mask):
+            mean_diff = np.mean(diff[mask], axis=0)
+        else:
+            mean_diff = np.zeros(3)
+        color_differences.append(mean_diff.tolist())
+
+    metrics["average_person_color_difference"] = np.mean(color_differences, axis=0).tolist()
+
 
     # Save metrics
     metrics_path = output_dir / "blender_renders" / "render_metrics.json"

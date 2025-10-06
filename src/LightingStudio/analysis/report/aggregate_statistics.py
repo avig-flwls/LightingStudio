@@ -3046,12 +3046,22 @@ def generate_aggregate_statistics_html(experiment_dir: Path) -> str:
         plots_3d_js
     )
     
-    # Step 8: Write output file
+    # Step 8: Write output files
     html_path = experiment_dir / f"{experiment_name}_aggregate_statistics.html"
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
     
+    # Save raw DataFrame as CSV
+    csv_path = experiment_dir / f"{experiment_name}_raw_data.csv"
+    df.to_csv(csv_path, index=False)
+    
+    # Save raw DataFrame as pickle for full data preservation
+    pickle_path = experiment_dir / f"{experiment_name}_raw_data.pkl"
+    df.to_pickle(pickle_path)
+    
     print(f"Generated aggregate statistics HTML: {html_path}")
+    print(f"Saved raw DataFrame as CSV: {csv_path}")
+    print(f"Saved raw DataFrame as pickle: {pickle_path}")
     return str(html_path)
 
 

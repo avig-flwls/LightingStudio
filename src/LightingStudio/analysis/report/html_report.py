@@ -455,7 +455,43 @@ def _generate_html_template(
         </div>
         """
         
-        person_metrics_section = person1_metrics + person2_metrics
+        # Average person color difference (combined across all person renders)
+        color_diff_metrics = ""
+        avg_person_color_diff = render_metrics.get('average_person_color_difference', None)
+        if avg_person_color_diff and len(avg_person_color_diff) >= 3:
+            r_diff = avg_person_color_diff[0]
+            g_diff = avg_person_color_diff[1]
+            b_diff = avg_person_color_diff[2]
+            
+            # Calculate magnitude for overall color difference
+            magnitude = (r_diff**2 + g_diff**2 + b_diff**2)**0.5
+            
+            color_diff_metrics = f"""
+        <div class="person-metrics">
+            <h4>Average Person Color Difference</h4>
+            <p style="font-size: 0.9em; color: #666; margin: 5px 0;">Combined average across all person renders vs white background</p>
+            <div class="metric">
+                <span class="metric-label">Overall Magnitude:</span>
+                <span class="metric-value">{magnitude:.3f}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">RGB Components:</span>
+                <span class="metric-value">
+                    <span style="color: #ff4444;">R: {r_diff:.3f}</span>, 
+                    <span style="color: #44ff44;">G: {g_diff:.3f}</span>, 
+                    <span style="color: #4444ff;">B: {b_diff:.3f}</span>
+                </span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Color Difference:</span>
+                <span class="metric-value">
+                    <div style="display: inline-block; width: 40px; height: 25px; background-color: rgb({max(0, min(255, abs(r_diff)))}, {max(0, min(255, abs(g_diff)))}, {max(0, min(255, abs(b_diff)))}); border: 1px solid #ccc; margin-left: 10px; vertical-align: middle; border-radius: 3px;"></div>
+                </span>
+            </div>
+        </div>
+        """
+        
+        person_metrics_section = person1_metrics + person2_metrics + color_diff_metrics
     
     # Timing information section removed
     
@@ -1247,6 +1283,7 @@ def _generate_html_template(
                     <div class="hdri-metrics-panel">
                         <h4>HDRI Analysis Metrics</h4>
                         {metrics_section}
+                        {person_metrics_section}
                     </div>
                 </div>
                 
