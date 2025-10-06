@@ -45,10 +45,10 @@ OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 # 
 # Process a single HDRI file (saves both EXR and PNG):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --hdri "path/to/file.exr" --n_samples 1024 --l_max 3
-#
+
 # Process a single HDRI file (PNG only for faster processing):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --hdri "path/to/file.exr" --n_samples 1024 --l_max 3 --png-only
-#
+
 # Process all HDRI files in a folder with parallel processing (auto-detects CPU cores):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "C:\Users\AviGoyal\Documents\LightingStudio\tmp\source\1k_small" --n_samples 1024 --l_max 3 --png-only
@@ -57,7 +57,7 @@ OUTPUT_DIR = r"C:\Users\AviGoyal\Documents\LightingStudio\tmp\experiments"
 
 # Process with specific number of parallel processes:
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 4
-#
+
 # Process sequentially (single-threaded):
 # python -m src.LightingStudio.analysis.report.generate_report_parallel --folder "path/to/hdris" --n_samples 1024 --l_max 3 --png-only --processes 1
 
